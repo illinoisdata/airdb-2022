@@ -1,0 +1,25 @@
+[package]
+name = "airindex"
+description = "Learned index on external memory model for key-value data"
+version = "0.1.0"
+authors = ["Supawit Chockchowwat <supawit2@illinois.edu"]
+edition = "2021"
+# keywords = ["kv", kv-store", "kv store", "key-value", "key-value store", "external memory", "disk", "hdd", "ssd", "network", "nfs", "file systems", "learned index", "index", "hierarchical index", "model"]
+repository = "https://github.com/illinoisdata/airindex"
+readme = "https://github.com/illinoisdata/airindex/blob/main/README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+itertools = "0.10.3"
+rand = "0.8.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+structopt = { version = "0.3", default-features = false }
+tempdir = "0.3.7"
+tempfile = "3"
+
+[[bin]]
+name = "profile_storage"
+path = "src/bin/profile_storage.rs"
