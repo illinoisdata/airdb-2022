@@ -1,3 +1,21 @@
+#/!bin/bash
+
+int_handler() {
+    echo "Interrupted."
+    kill $PPID
+    exit 1
+}
+trap 'int_handler' INT
+
+if [ -z "$1" ]
+  then
+    echo "Require one argument (ROOT, directory to profile on)"
+    exit 1
+fi
+
+ROOT=$1
+echo "Using ROOT=$ROOT"
+sleep 5
 
 READ_SIZES=(
   # Bs
@@ -49,10 +67,9 @@ READ_SIZES=(
   # "549755813888"
 )
 
-
-mkdir tmp_dir
+mkdir ${ROOT}/tmp_dir
 for ((i = 0; i < ${#READ_SIZES[@]}; i++)) do
   read_size="${READ_SIZES[$i]}"
-  target/release/profile_storage --root-path tmp_dir --out-path out_profile.jsons --num-trials 64 --num-files 1 --file-size 1073741824 --content random_constant --num-readsets 1 --file-picking random --read-mode sequential --num-read-pages 1 --read-page-size ${read_size} --read-method batch_sequential
+  target/release/profile_storage --root-path ${ROOT}/tmp_dir --out-path out_profile.jsons --num-trials 64 --num-files 1 --file-size 1073741824 --content random_constant --num-readsets 1 --file-picking random --read-mode sequential --num-read-pages 1 --read-page-size ${read_size} --read-method batch_sequential
 done
-rm -d tmp_dir
+rm -d ${ROOT}/tmp_dir
