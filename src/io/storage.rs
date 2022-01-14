@@ -14,12 +14,12 @@ pub struct Range {
   pub length: usize,
 }
 
-pub enum ReadRequest<'a> {
+pub enum ReadRequest {
   All {
-    path: &'a Path,
+    path: PathBuf,
   },
   Range {
-    path: &'a Path,
+    path: PathBuf,
     range: Range,
   },
 }
@@ -34,6 +34,8 @@ pub trait Adaptor {
   // generic read for supported request type
   fn read(&self, request: &ReadRequest) -> io::Result<Vec<u8>>;
 
+  // prepare to write inside this path
+  fn create(&self, path: &Path) -> io::Result<()>;
   // write whole byte array to blob
   fn write_all(&self, path: &Path, buf: &[u8]) -> io::Result<()>;
 }
@@ -72,6 +74,10 @@ impl Adaptor for FileSystemAdaptor {
       ReadRequest::All { path } => self.read_all(path),
       ReadRequest::Range { path, range } => self.read_range(path, range),
     }
+  }
+
+  fn create(&self, path: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(self.root_path.join(path))
   }
 
   fn write_all(&self, path: &Path, buf: &[u8]) -> io::Result<()> {
@@ -119,6 +125,10 @@ impl Adaptor for ExternalStorage {
     self.adaptor.read(request)
   }
 
+  fn create(&self, path: &Path) -> io::Result<()> {
+    self.adaptor.create(path)
+  }
+
   fn write_all(&self, path: &Path, buf: &[u8]) -> io::Result<()> {
     self.adaptor.write_all(path, buf)
   }
@@ -135,49 +145,57 @@ mod tests {
   /* generic Adaptor unit tests */
 
   fn write_all_zero_ok(adaptor: impl Adaptor) -> io::Result<()> {
-    let test_path = Path::new("test.bin");
+    let test_path = PathBuf::from("test.bin");
     let test_data = [0u8; 256];
-    adaptor.write_all(test_path, &test_data)?;
+    adaptor.write_all(&test_path, &test_data)?;
+    Ok(())
+  }
+
+  fn write_all_inside_dir_ok(adaptor: impl Adaptor) -> io::Result<()> {
+    let test_path = PathBuf::from("test_dir/test.bin");
+    let test_data = [0u8; 256];
+    adaptor.create(Path::new("test_dir"))?;
+    adaptor.write_all(&test_path, &test_data)?;
     Ok(())
   }
 
   fn write_read_all_zero_ok(adaptor: impl Adaptor) -> io::Result<()> {
     // write some data
-    let test_path = Path::new("test.bin");
+    let test_path = PathBuf::from("test.bin");
     let test_data = [0u8; 256];
-    adaptor.write_all(test_path, &test_data)?;
+    adaptor.write_all(&test_path, &test_data)?;
 
     // read and check
-    let test_data_reread = adaptor.read_all(test_path)?;
+    let test_data_reread = adaptor.read_all(&test_path)?;
     assert_eq!(&test_data[..], &test_data_reread[..], "Reread data not matched with original one");
     Ok(())
   }
 
   fn write_read_all_random_ok(adaptor: impl Adaptor) -> io::Result<()> {
     // write some data
-    let test_path = Path::new("test.bin");
+    let test_path = PathBuf::from("test.bin");
     let mut test_data = [0u8; 256];
     rand::thread_rng().fill(&mut test_data[..]);
-    adaptor.write_all(test_path, &test_data)?;
+    adaptor.write_all(&test_path, &test_data)?;
 
     // read and check
-    let test_data_reread = adaptor.read_all(test_path)?;
+    let test_data_reread = adaptor.read_all(&test_path)?;
     assert_eq!(&test_data[..], &test_data_reread[..], "Reread data not matched with original one");
     Ok(())
   }
 
   fn write_twice_read_all_random_ok(adaptor: impl Adaptor) -> io::Result<()> {
     // write some data
-    let test_path = Path::new("test.bin");
+    let test_path = PathBuf::from("test.bin");
     let test_data_old = [1u8; 256];
-    adaptor.write_all(test_path, &test_data_old)?;
+    adaptor.write_all(&test_path, &test_data_old)?;
 
     // write more, this should completely replace previous result
     let test_data_actual = [2u8; 128];
-    adaptor.write_all(test_path, &test_data_actual)?;
+    adaptor.write_all(&test_path, &test_data_actual)?;
 
     // read and check
-    let test_data_reread = adaptor.read_all(test_path)?;
+    let test_data_reread = adaptor.read_all(&test_path)?;
     assert_ne!(&test_data_old[..], &test_data_reread[..], "Old data should be removed");
     assert_eq!(
         &test_data_actual[..],
@@ -188,17 +206,17 @@ mod tests {
 
   fn write_read_range_random_ok(adaptor: impl Adaptor) -> io::Result<()> {
     // write some data
-    let test_path = Path::new("test.bin");
+    let test_path = PathBuf::from("test.bin");
     let mut test_data = [0u8; 256];
     rand::thread_rng().fill(&mut test_data[..]);
-    adaptor.write_all(test_path, &test_data)?;
+    adaptor.write_all(&test_path, &test_data)?;
 
     // test 100 random ranges
     let mut rng = rand::thread_rng();
     for _ in 0..100 {
       let offset = rng.gen_range(0..test_data.len() - 1);
       let length = rng.gen_range(0..test_data.len() - offset);
-      let test_data_range = adaptor.read_range(test_path, &Range{ offset, length })?;
+      let test_data_range = adaptor.read_range(&test_path, &Range{ offset, length })?;
       let test_data_expected = &test_data[offset..offset+length];
       assert_eq!(test_data_expected, &test_data_range[..], "Reread data not matched with original one"); 
     }
@@ -207,13 +225,13 @@ mod tests {
 
   fn write_read_generic_random_ok(adaptor: impl Adaptor) -> io::Result<()> {
     // write some data
-    let test_path = Path::new("test.bin");
+    let test_path = PathBuf::from("test.bin");
     let mut test_data = [0u8; 256];
     rand::thread_rng().fill(&mut test_data[..]);
-    adaptor.write_all(test_path, &test_data)?;
+    adaptor.write_all(&test_path, &test_data)?;
 
     // read all
-    let test_data_reread = adaptor.read(&ReadRequest::All { path: test_path })?;
+    let test_data_reread = adaptor.read(&ReadRequest::All { path: test_path.clone() })?;
     assert_eq!(&test_data[..], &test_data_reread[..], "Reread data not matched with original one");
 
     // test 100 random ranges
@@ -222,7 +240,7 @@ mod tests {
       let offset = rng.gen_range(0..test_data.len() - 1);
       let length = rng.gen_range(0..test_data.len() - offset);
       let test_data_reread = adaptor.read(&ReadRequest::Range { 
-          path: test_path,
+          path: test_path.clone(),
           range: Range{ offset, length },
       })?;
       let test_data_expected = &test_data[offset..offset+length];
@@ -246,6 +264,13 @@ mod tests {
     let temp_dir = TempDir::new()?;
     let fsa = FileSystemAdaptor::new(&temp_dir);
     write_all_zero_ok(fsa)
+  }
+
+  #[test]
+  fn fsa_write_all_inside_dir_ok() -> io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let fsa = FileSystemAdaptor::new(&temp_dir);
+    write_all_inside_dir_ok(fsa)
   }
 
   #[test]
@@ -365,10 +390,10 @@ mod tests {
     let es = ExternalStorage::new(Box::new(fsa));
 
     // write some data
-    let test_path = Path::new("test.bin");
+    let test_path = PathBuf::from("test.bin");
     let mut test_data = [0u8; 256];
     rand::thread_rng().fill(&mut test_data[..]);
-    es.write_all(test_path, &test_data)?;
+    es.write_all(&test_path, &test_data)?;
 
     // test 100 random ranges
     let mut rng = rand::thread_rng();
@@ -376,7 +401,7 @@ mod tests {
       let offset = rng.gen_range(0..test_data.len() - 1);
       let length = rng.gen_range(0..test_data.len() - offset);
       ReadRequest::Range { 
-          path: test_path,
+          path: test_path.clone(),
           range: Range{ offset, length },
       }
     }).collect();

@@ -213,7 +213,7 @@ fn generate_experiment_config<'a>(args: &Cli, file_descs: &'a [FileDescription])
   }
 }
 
-fn generate_one_readset<'a>(exp_config: &'a ExperimentConfig) -> Vec<astorage::ReadRequest<'a>>  {
+fn generate_one_readset(exp_config: &ExperimentConfig) -> Vec<astorage::ReadRequest>  {
   let mut rng = rand::thread_rng();
 
   // select one file
@@ -232,7 +232,7 @@ fn generate_one_readset<'a>(exp_config: &'a ExperimentConfig) -> Vec<astorage::R
       (0..num_pages).map(|page_idx| {
         let offset = initial_offset + (page_idx as usize) * page_size;
         astorage::ReadRequest::Range{
-          path: file_desc.path.as_path(),
+          path: file_desc.path.clone(),
           range: astorage::Range{ offset, length: page_size },
         }
       }).collect::<Vec<_>>()
