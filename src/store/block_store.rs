@@ -1,17 +1,24 @@
 use serde::{Serialize, Deserialize};
-use std::error::Error;
+use std::fmt;
 use std::io;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use crate::db::key_buffer::KeyBuffer;
-use crate::db::key_position::KeyPositionCollection;
-use crate::db::key_position::PositionT;
+use crate::common::error::GResult;
 use crate::io::storage::Adaptor;
 use crate::io::storage::ExternalStorage;
-use crate::io::storage::ReadRequest;
 use crate::io::storage::Range;
-use crate::meta::context::Context;
+use crate::io::storage::ReadRequest;
+use crate::meta::Context;
+use crate::store::DataStore;
+use crate::store::DataStoreReader;
+use crate::store::DataStoreReaderIter;
+use crate::store::DataStoreWriter;
+use crate::store::key_buffer::KeyBuffer;
+use crate::store::key_position::KeyPositionCollection;
+use crate::store::key_position::PositionT;
+use crate::store::DataStoreMeta;
+use crate::store::DataStoreMetaserde;
 
 
 /* Page format */
@@ -37,7 +44,7 @@ fn read_page(page: &[u8]) -> (FlagT, &[u8]) {
 
 /* Main block store */
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BlockStoreConfig {
   prefix: PathBuf,
   block_size: usize,
@@ -68,27 +75,32 @@ impl BlockStoreConfig {
     self
   }
 
-  pub fn build(self, storage: Rc<ExternalStorage>) -> BlockStore {
+  pub fn build(self, storage: &Rc<ExternalStorage>) -> BlockStore {
     BlockStore::new(storage, self)
   }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BlockStoreState {
   cfg: BlockStoreConfig,
   total_pages: usize,
 }
-
 
 pub struct BlockStore {
   storage: Rc<ExternalStorage>,
   state: BlockStoreState,
 }
 
+impl fmt::Debug for BlockStore {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write!(f, "BlockStore {{ {:?} }}", self.state)
+  }
+}
+
 impl BlockStore {
-  fn new(storage: Rc<ExternalStorage>, cfg: BlockStoreConfig) -> BlockStore {
+  fn new(storage: &Rc<ExternalStorage>, cfg: BlockStoreConfig) -> BlockStore {
     BlockStore{
-      storage,
+      storage: Rc::clone(storage),
       state: BlockStoreState {
         cfg,
         total_pages: 0,
@@ -96,39 +108,12 @@ impl BlockStore {
     }
   }
 
-  pub fn load(ctx: &Context, state: BlockStoreState) -> BlockStore {
-    BlockStore{ storage: Rc::clone(&ctx.storage), state }
-  }
-
   pub fn builder(prefix_name: &str) -> BlockStoreConfig {
     BlockStoreConfig::new(prefix_name)
   }
 
-  pub fn begin_write(&mut self) -> Result<BlockStoreWriter, Box<dyn Error>> {
-    // since we require mutable borrow, there will only be one writer in a code block.
-    // this would disallow readers while the writer's lifetime as well
-
-    // prepare the prefix directory
-    self.storage.create(&self.state.cfg.prefix)?;
-
-    // make the writer
-    self.state.total_pages = 0;  // TODO: append write?
-    Ok(BlockStoreWriter::new(self))
-  }
-
   fn end_write(&mut self, written_pages: usize) {
     self.state.total_pages += written_pages;
-  }
-
-  pub fn read_all(&self) -> Result<BlockStoreReader, Box<dyn Error>> {
-    self.read_within(0, self.state.total_pages * self.state.cfg.page_size)
-  }
-
-  pub fn read_within(&self, offset: PositionT, length: PositionT) -> Result<BlockStoreReader, Box<dyn Error>> {
-    // read and extract dbuffer than completely fits in the range 
-    let (chunk_flags, chunks_buffer) = self.read_page_range(offset, length)?;
-    let chunk_size = self.chunk_size();
-    Ok(BlockStoreReader::new(chunk_flags, chunks_buffer, chunk_size))
   }
 
   fn chunk_size(&self) -> usize {
@@ -185,8 +170,7 @@ impl BlockStore {
         // more blocks to read... read til the end of this block for now
         (start_block_idx + 1) * pages_per_block
       };
-      let end_section_offset = (end_section_page_idx % pages_per_block) * self.state.cfg.page_size;
-      let section_length = end_section_offset - start_section_offset;
+      let section_length = (end_section_page_idx - start_page_idx) * self.state.cfg.page_size;
 
       // add read request for this section
       read_requests.push(ReadRequest::Range {
@@ -202,19 +186,44 @@ impl BlockStore {
   }
 }
 
-// impl<'s> Metaserde for BlockStore<'s> {
-//   fn to_meta(&self, ctx: &mut Context) -> Result<Vec<u8>, Box<dyn Error>> {
-//     let mut s = flexbuffers::FlexbufferSerializer::new();
-//     self.state.serialize(&mut s)?;
-//     Ok(s.take_buffer())
-//   }
+impl DataStore for BlockStore {
+  fn begin_write(&mut self) -> GResult<Box<dyn DataStoreWriter + '_>> {
+    // since we require mutable borrow, there will only be one writer in a code block.
+    // this would disallow readers while the writer's lifetime as well
 
-//   fn from_meta(ctx: &Context, meta: &[u8]) -> Result<BlockStore<'s>, Box<dyn Error>> {
-//     let r = flexbuffers::Reader::get_root(meta)?;
-//     let state = BlockStoreState::deserialize(r)?;
-//     Ok(BlockStore::load(ctx, state))
-//   }
-// }
+    // prepare the prefix directory
+    self.storage.create(&self.state.cfg.prefix)?;
+
+    // make the writer
+    self.state.total_pages = 0;  // TODO: append write?
+    Ok(Box::new(BlockStoreWriter::new(self)))
+  }
+
+  fn read_all(&self) -> GResult<Box<dyn DataStoreReader>> {
+    self.read_within(0, self.state.total_pages * self.state.cfg.page_size)
+  }
+
+  fn read_within(&self, offset: PositionT, length: PositionT) -> GResult<Box<dyn DataStoreReader>> {
+    // read and extract dbuffer than completely fits in the range 
+    let (chunk_flags, chunks_buffer) = self.read_page_range(offset, length)?;
+    let chunk_size = self.chunk_size();
+    Ok(Box::new(BlockStoreReader::new(chunk_flags, chunks_buffer, chunk_size)))
+  }
+}
+
+impl DataStoreMetaserde for BlockStore {  // for Metaserde
+  fn to_meta(&self, ctx: &mut Context) -> GResult<DataStoreMeta> {
+    ctx.put_storage(&self.storage);
+    Ok(DataStoreMeta::BlockStore{ state: self.state.clone() })
+  }
+}
+
+impl BlockStore {  // for Metaserde
+  pub fn from_meta(meta: BlockStoreState, ctx: &Context) -> GResult<BlockStore> {
+    let storage = Rc::clone(ctx.storage.as_ref().expect("BlockStore requires storage context"));
+    Ok(BlockStore{ storage, state: meta })
+  }
+}
 
 
 /* Writer */
@@ -249,19 +258,6 @@ impl<'a> BlockStoreWriter<'a> {
       pages_per_block,
       key_positions: KeyPositionCollection::new(),
     }
-  }
-
-  pub fn write(&mut self, kb: &KeyBuffer) -> io::Result<()> {
-    let key_offset = self.write_dbuffer(&kb.buffer)?;
-    self.key_positions.push(kb.key, key_offset);
-    Ok(())
-  }
-
-  pub fn commit(mut self) -> io::Result<KeyPositionCollection> {
-    self.flush_current_block()?;
-    self.owner_store.end_write(self.page_idx);
-    self.key_positions.set_position_range(0, self.page_idx * self.owner_store.state.cfg.page_size);
-    Ok(self.key_positions)
   }
 
   fn write_dbuffer(&mut self, dbuffer: &[u8]) -> io::Result<PositionT> {
@@ -316,11 +312,20 @@ impl<'a> BlockStoreWriter<'a> {
   }
 }
 
-// impl<'s, 'a> Drop for BlockStoreWriter<'s, 'a> {
-//   fn drop(&mut self) {
-//     self.owner_store.end_write(0)
-//   }
-// }
+impl<'a> DataStoreWriter for BlockStoreWriter<'a> {
+  fn write(&mut self, kb: &KeyBuffer) -> io::Result<()> {
+    let key_offset = self.write_dbuffer(&kb.buffer)?;
+    self.key_positions.push(kb.key, key_offset);
+    Ok(())
+  }
+
+  fn commit(mut self: Box<Self>) -> io::Result<KeyPositionCollection> {
+    self.flush_current_block()?;
+    self.owner_store.end_write(self.page_idx);
+    self.key_positions.set_position_range(0, self.page_idx * self.owner_store.state.cfg.page_size);
+    Ok(self.key_positions)
+  }
+}
 
 
 /* Reader */
@@ -352,11 +357,15 @@ impl BlockStoreReader {
       chunk_size,
     }
   }
+}
 
-  pub fn iter(&self) -> BlockStoreReaderIter {
-    BlockStoreReaderIter{ r: self, chunk_idx: self.chunk_idx_first }
+impl DataStoreReader for BlockStoreReader {
+  fn iter(&self) -> Box<dyn DataStoreReaderIter + '_> {
+    Box::new(BlockStoreReaderIter{ r: self, chunk_idx: self.chunk_idx_first })
   }
 }
+
+impl<'a> DataStoreReaderIter<'a> for BlockStoreReaderIter<'a> {}
 
 impl<'a> Iterator for BlockStoreReaderIter<'a> {
   type Item = &'a [u8];
@@ -388,12 +397,12 @@ impl<'a> Iterator for BlockStoreReaderIter<'a> {
 mod tests {
   use super::*;
   use tempfile::TempDir;
-  use crate::db::key_buffer::KeyT;
   use crate::io::storage::FileSystemAdaptor;
+  use crate::store::key_position::KeyT;
 
   fn generate_simple_kv() -> ([KeyT; 14], [Box<[u8]>; 14]) {
     let test_keys: [KeyT; 14] = [
-      -50,
+      50,
       100,
       200,
       1,
@@ -428,19 +437,20 @@ mod tests {
   }
 
   #[test]
-  fn read_write_full_test() -> Result<(), Box<dyn Error>> {
+  fn read_write_full_test() -> GResult<()> {
     let (test_keys, test_buffers) = generate_simple_kv();
 
     // setup a block store
     let temp_dir = TempDir::new()?;
     let fsa = FileSystemAdaptor::new(&temp_dir);
     let es = Rc::new(ExternalStorage::new(Box::new(fsa)));
-    let mut bstore = BlockStore::builder("test_bstore").build(Rc::clone(&es));
+    let mut bstore = BlockStore::builder("test_bstore")
+      .block_size(128)  // tune down for unit testing
+      .build(&es);
 
     // write but never commit
     let _kps = {
       let mut bwriter = bstore.begin_write()?;
-      assert_eq!(bwriter.owner_store.state.total_pages, 0, "Total pages should be cleared");
       for (key, value) in test_keys.iter().zip(test_buffers.iter()) {
         bwriter.write(&KeyBuffer{ key: *key, buffer: value.to_vec()})?;
       }
@@ -450,7 +460,6 @@ mod tests {
     // write some data
     let kps = {
       let mut bwriter = bstore.begin_write()?;
-      assert_eq!(bwriter.owner_store.state.total_pages, 0, "Total pages should be cleared");
       for (key, value) in test_keys.iter().zip(test_buffers.iter()) {
         bwriter.write(&KeyBuffer{ key: *key, buffer: value.to_vec()})?;
       }

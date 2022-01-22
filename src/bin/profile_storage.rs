@@ -63,6 +63,9 @@ pub struct ProfileResult<'a> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+  // execution init
+  env_logger::init();
+  
   // parse args
   let args = Cli::from_args();
   println!("{:?}", args);

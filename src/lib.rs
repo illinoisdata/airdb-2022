@@ -1,6 +1,8 @@
+// roughly in abstraction order
+pub mod common;
 pub mod io;
-pub mod db;
-pub mod index;
+pub mod store;
 pub mod model;
-mod common;
-mod meta;
+pub mod index;
+pub mod db;
+pub mod meta;

@@ -65,7 +65,14 @@ impl Adaptor for FileSystemAdaptor {
         .read(true)
         .open(self.root_path.join(path))?;
     let mut buf = vec![0u8; range.length];
-    f.read_at(&mut buf, range.offset.try_into().unwrap())?;
+
+    // File::read_at might return fewer bytes than requested (e.g. 2GB at a time)
+    // To read whole range, we request until the buffer is filled
+    let mut buf_offset = 0;
+    while buf_offset < range.length {
+      let read_bytes = f.read_at(&mut buf[buf_offset..], (buf_offset + range.offset).try_into().unwrap())?; 
+      buf_offset += read_bytes;
+    }
     Ok(buf)
   }
 

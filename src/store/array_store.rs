@@ -1,20 +1,26 @@
-use byteorder::{LittleEndian, ByteOrder};
 use serde::{Serialize, Deserialize};
-use std::error::Error;
+use std::fmt;
 use std::io;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use crate::db::key_buffer::KeyBuffer;
-use crate::db::key_position::KeyPositionCollection;
-use crate::db::key_position::PositionT;
+use crate::common::error::GResult;
 use crate::io::storage::Adaptor;
 use crate::io::storage::ExternalStorage;
 use crate::io::storage::Range;
-use crate::meta::context::Context;
+use crate::meta::Context;
+use crate::store::DataStore;
+use crate::store::DataStoreMeta;
+use crate::store::DataStoreMetaserde;
+use crate::store::DataStoreReader;
+use crate::store::DataStoreReaderIter;
+use crate::store::DataStoreWriter;
+use crate::store::key_buffer::KeyBuffer;
+use crate::store::key_position::KeyPositionCollection;
+use crate::store::key_position::PositionT;
 
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ArrayStoreState {
   array_path: PathBuf,
   data_size: usize,
@@ -28,10 +34,16 @@ pub struct ArrayStore {
   state: ArrayStoreState,
 }
 
+impl fmt::Debug for ArrayStore {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write!(f, "ArrayStore {{ {:?} }}", self.state)
+  }
+}
+
 impl ArrayStore {
-  pub fn new_sized(storage: Rc<ExternalStorage>, array_path: PathBuf, data_size: usize) -> ArrayStore {
+  pub fn new_sized(storage: &Rc<ExternalStorage>, array_path: PathBuf, data_size: usize) -> ArrayStore {
     ArrayStore{
-      storage,
+      storage: Rc::clone(storage),
       state: ArrayStoreState {
         array_path,
         data_size,
@@ -40,38 +52,56 @@ impl ArrayStore {
       },
     }
   }
-
-  // TODO: move to script level
-  pub fn sosd_uint32(storage: Rc<ExternalStorage>, array_path: PathBuf, length: usize) -> ArrayStore {
+  pub fn from_exact(storage: &Rc<ExternalStorage>, array_path: PathBuf, data_size: usize, offset: usize, length: usize) -> ArrayStore {
     ArrayStore{
-      storage,
+      storage: Rc::clone(storage),
       state: ArrayStoreState {
         array_path,
-        data_size: 4,
-        offset: 8,  // SOSD array leads with 8-byte encoding of the length
+        data_size,
+        offset,
         length,
       },
     }
   }
 
-  // TODO: move to script level
-  pub fn sosd_uint64(storage: Rc<ExternalStorage>, array_path: PathBuf, length: usize) -> ArrayStore {
-    ArrayStore{
-      storage,
-      state: ArrayStoreState {
-        array_path,
-        data_size: 8,
-        offset: 8,  // SOSD array leads with 8-byte encoding of the length
-        length,
+  pub fn read_array_within(&self, offset: PositionT, length: PositionT) -> GResult<ArrayStoreReader> {
+    // read and extract dbuffer than completely fits in the range 
+    let (array_buffer, start_rank) = self.read_page_range(offset, length)?;
+    Ok(ArrayStoreReader::new(array_buffer, start_rank, self.state.data_size))
+  }
+
+  pub fn data_size(&self) -> usize {
+    self.state.data_size
+  }
+
+  fn end_write(&mut self, written_elements: usize) {
+    self.state.length += written_elements;
+  }
+
+  fn write_array(&self, array_buffer: &[u8]) -> io::Result<()> {
+      self.storage.write_all(&self.state.array_path, array_buffer)
+  }
+
+  fn read_page_range(&self, offset: PositionT, length: PositionT) -> io::Result<(Vec<u8>, usize)> {
+    // calculate first and last "page" indexes
+    let end_offset = offset + length;
+    let start_rank = offset / self.state.data_size + (offset % self.state.data_size != 0) as usize;
+    let end_rank = end_offset / self.state.data_size;
+
+    // make read requests
+    let array_buffer = self.storage.read_range(
+      &self.state.array_path,
+      &Range{
+        offset: start_rank * self.state.data_size + self.state.offset,
+        length: (end_rank - start_rank) * self.state.data_size
       },
-    }
+    )?;
+    Ok((array_buffer, start_rank))
   }
+}
 
-  pub fn load(ctx: &Context, state: ArrayStoreState) -> ArrayStore {
-    ArrayStore{ storage: Rc::clone(&ctx.storage), state }
-  }
-
-  pub fn begin_write(&mut self) -> Result<ArrayStoreWriter, Box<dyn Error>> {
+impl DataStore for ArrayStore {
+  fn begin_write(&mut self) -> GResult<Box<dyn DataStoreWriter + '_>> {
     // since we require mutable borrow, there will only be one writer in a code block.
     // this would disallow readers while the writer's lifetime as well
 
@@ -80,59 +110,38 @@ impl ArrayStore {
 
     // make the writer
     self.state.length = 0;  // TODO: append write?
-    Ok(ArrayStoreWriter::new(self))
+    Ok(Box::new(ArrayStoreWriter::new(self)))
   }
 
-  fn end_write(&mut self, written_elements: usize) {
-    self.state.length += written_elements;
-  }
-
-  pub fn read_all(&self) -> Result<ArrayStoreReader, Box<dyn Error>> {
+  fn read_all(&self) -> GResult<Box<dyn DataStoreReader>> {
     self.read_within(0, self.state.length * self.state.data_size)
   }
 
-  pub fn read_within(&self, offset: PositionT, length: PositionT) -> Result<ArrayStoreReader, Box<dyn Error>> {
+  fn read_within(&self, offset: PositionT, length: PositionT) -> GResult<Box<dyn DataStoreReader>> {
     // read and extract dbuffer than completely fits in the range 
-    let array_buffer = self.read_page_range(offset, length)?;
-    Ok(ArrayStoreReader::new(array_buffer, self.state.data_size))
-  }
-
-  pub fn reconstruct_key_positions(&self) -> Result<KeyPositionCollection, Box<dyn Error>> {
-    // HACK: should be at semantic level above, given the deserialization
-    let mut kps = KeyPositionCollection::new();
-    let reader = self.read_all()?;
-    let mut current_offset = 0;
-    for dbuffer in reader.iter() {
-      let current_key = LittleEndian::read_uint(dbuffer, self.state.data_size);
-      kps.push(current_key.try_into().unwrap(), current_offset);  // TODO: overflow?
-      current_offset += self.state.data_size;
-    }
-    Ok(kps)
-  }
-
-  fn write_array(&self, array_buffer: &[u8]) -> io::Result<()> {
-      self.storage.write_all(&self.state.array_path, array_buffer)
-  }
-
-  fn read_page_range(&self, offset: PositionT, length: PositionT) -> io::Result<Vec<u8>> {
-    // calculate first and last "page" indexes
-    let offset = offset + self.state.offset;
-    let end_offset = offset + length;
-    let start_page_idx = offset / self.state.data_size + (offset % self.state.data_size != 0) as usize;
-    let end_page_idx = end_offset / self.state.data_size;
-
-    // make read requests
-    let array_buffer = self.storage.read_range(
-      &self.state.array_path,
-      &Range{
-        offset: start_page_idx * self.state.data_size,
-        length: (end_page_idx - start_page_idx) * self.state.data_size
-      },
-    )?;
-    Ok(array_buffer)
+    let (array_buffer, start_rank) = self.read_page_range(offset, length)?;
+    Ok(Box::new(ArrayStoreReader::new(array_buffer, start_rank, self.state.data_size)))
   }
 }
 
+impl DataStoreMetaserde for ArrayStore {  // for Metaserde
+  fn to_meta(&self, ctx: &mut Context) -> GResult<DataStoreMeta> {
+    ctx.put_storage(&self.storage);
+    Ok(DataStoreMeta::ArrayStore{ state: self.state.clone() })
+  }
+}
+
+impl ArrayStore {  // for Metaserde
+  pub fn to_meta_state(self, ctx: &mut Context) -> GResult<ArrayStoreState> {
+    ctx.put_storage(&self.storage);
+    Ok(self.state)
+  }
+
+  pub fn from_meta(meta: ArrayStoreState, ctx: &Context) -> GResult<ArrayStore> {
+    let storage = Rc::clone(ctx.storage.as_ref().expect("ArrayStore requires storage context"));
+    Ok(ArrayStore{ storage, state: meta })
+  }
+}
 
 /* Writer */
 
@@ -155,20 +164,6 @@ impl<'a> ArrayStoreWriter<'a> {
     }
   }
 
-  pub fn write(&mut self, kb: &KeyBuffer) -> io::Result<()> {
-    let key_offset = self.write_dbuffer(&kb.buffer)?;
-    self.key_positions.push(kb.key, key_offset);
-    Ok(())
-  }
-
-  pub fn commit(mut self) -> io::Result<KeyPositionCollection> {
-    let length = self.key_positions.len();
-    self.flush_array_buffer()?;
-    self.owner_store.end_write(length);
-    self.key_positions.set_position_range(0, length * self.owner_store.state.data_size);
-    Ok(self.key_positions)
-  }
-
   fn write_dbuffer(&mut self, dbuffer: &[u8]) -> io::Result<PositionT> {
     assert_eq!(dbuffer.len(), self.owner_store.state.data_size);
     let cur_position = self.array_buffer.len();
@@ -182,11 +177,28 @@ impl<'a> ArrayStoreWriter<'a> {
   }
 }
 
+impl<'a> DataStoreWriter for ArrayStoreWriter<'a> {
+  fn write(&mut self, kb: &KeyBuffer) -> io::Result<()> {
+    let key_offset = self.write_dbuffer(&kb.buffer)?;
+    self.key_positions.push(kb.key, key_offset);
+    Ok(())
+  }
+
+  fn commit(mut self: Box<Self>) -> io::Result<KeyPositionCollection> {
+    let length = self.key_positions.len();
+    self.flush_array_buffer()?;
+    self.owner_store.end_write(length);
+    self.key_positions.set_position_range(0, length * self.owner_store.state.data_size);
+    Ok(self.key_positions)
+  }
+}
+
 
 /* Reader */
 
 pub struct ArrayStoreReader {
   array_buffer: Vec<u8>,
+  start_rank: usize,
   data_size: usize,
 }
 
@@ -195,22 +207,37 @@ pub struct ArrayStoreReaderIter<'a> {
   current_offset: usize,
 }
 
+pub struct ArrayStoreReaderIterWithRank<'a> {
+  r: &'a ArrayStoreReader,
+  rank: usize,
+  current_offset: usize,
+}
+
 impl ArrayStoreReader {
-  fn new(array_buffer: Vec<u8>, data_size: usize) -> ArrayStoreReader {
+  fn new(array_buffer: Vec<u8>, start_rank: usize, data_size: usize) -> ArrayStoreReader {
     ArrayStoreReader {
       array_buffer,
+      start_rank,
       data_size,
     }
   }
 
-  pub fn iter(&self) -> ArrayStoreReaderIter {
-    ArrayStoreReaderIter{ r: self, current_offset: 0 }
+  pub fn iter_with_rank(&self) -> ArrayStoreReaderIterWithRank {
+    ArrayStoreReaderIterWithRank{ r: self, rank: self.start_rank, current_offset: 0 }
   }
 }
 
+impl DataStoreReader for ArrayStoreReader {
+  fn iter(&self) -> Box<dyn DataStoreReaderIter + '_> {
+    Box::new(ArrayStoreReaderIter{ r: self, current_offset: 0 })
+  }
+}
+
+impl<'a> DataStoreReaderIter<'a> for ArrayStoreReaderIter<'a> {}
+
 impl<'a> Iterator for ArrayStoreReaderIter<'a> {
   type Item = &'a [u8];
-
+  
   fn next(&mut self) -> Option<Self::Item> {
     if self.current_offset < self.r.array_buffer.len() {
       let dbuffer = &self.r.array_buffer[self.current_offset..self.current_offset+self.r.data_size];
@@ -222,13 +249,31 @@ impl<'a> Iterator for ArrayStoreReaderIter<'a> {
   }
 }
 
+impl<'a> Iterator for ArrayStoreReaderIterWithRank<'a> {
+  type Item = (&'a [u8], usize);
+  
+  fn next(&mut self) -> Option<Self::Item> {
+    if self.current_offset < self.r.array_buffer.len() {
+      let dbuffer = &self.r.array_buffer[self.current_offset..self.current_offset+self.r.data_size];
+      let drank = self.rank;
+      self.current_offset += self.r.data_size;
+      self.rank += 1;
+      Some((dbuffer, drank))
+    } else {
+      None
+    }
+  }
+}
+
+
+
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use tempfile::TempDir;
-  use crate::db::key_buffer::KeyT;
   use crate::io::storage::FileSystemAdaptor;
+  use crate::store::key_position::KeyT;
 
   fn generate_simple_kv() -> ([KeyT; 10], [Vec<u8>; 10]) {
     let test_keys: [KeyT; 10] = [0, 2, 8, 21, 24, 666, 667, 669, 672, 679];
@@ -248,19 +293,18 @@ mod tests {
   }
 
   #[test]
-  fn read_write_full_test() -> Result<(), Box<dyn Error>> {
+  fn read_write_full_test() -> GResult<()> {
     let (test_keys, test_buffers) = generate_simple_kv();
 
     // setup a block store
     let temp_dir = TempDir::new()?;
     let fsa = FileSystemAdaptor::new(&temp_dir);
     let es = Rc::new(ExternalStorage::new(Box::new(fsa)));
-    let mut arrstore = ArrayStore::new_sized(Rc::clone(&es), PathBuf::from("test_arrstore"), 4);
+    let mut arrstore = ArrayStore::new_sized(&es, PathBuf::from("test_arrstore"), 4);
 
     // write but never commit
     let _kps = {
       let mut bwriter = arrstore.begin_write()?;
-      assert_eq!(bwriter.owner_store.state.length, 0, "Total pages should be cleared");
       for (key, value) in test_keys.iter().zip(test_buffers.iter()) {
         bwriter.write(&KeyBuffer{ key: *key, buffer: value.to_vec()})?;
       }
@@ -270,7 +314,6 @@ mod tests {
     // write some data
     let kps = {
       let mut bwriter = arrstore.begin_write()?;
-      assert_eq!(bwriter.owner_store.state.length, 0, "Total pages should be cleared");
       for (key, value) in test_keys.iter().zip(test_buffers.iter()) {
         bwriter.write(&KeyBuffer{ key: *key, buffer: value.to_vec()})?;
       }

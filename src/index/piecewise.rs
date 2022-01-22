@@ -1,19 +1,27 @@
+use serde::{Serialize, Deserialize};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
-use std::time::Duration;
 
 use crate::common::error::GResult;
-use crate::db::block_store::BlockStore;
-use crate::db::block_store::BlockStoreReader;
-use crate::db::key_buffer::KeyT;
-use crate::db::key_position::KeyPositionCollection;
-use crate::db::key_position::KeyPositionRange;
 use crate::index::Index;
+use crate::index::IndexMeta;
+use crate::index::IndexMetaserde;
 use crate::index::PartialIndex;
-use crate::io::profile::StorageProfile;
+use crate::index::PartialIndexMeta;
+use crate::index::PartialIndexMetaserde;
+use crate::meta::Context;
+use crate::model::BuilderFinalReport;
 use crate::model::ModelBuilder;
+use crate::model::ModelDraft;
 use crate::model::ModelRecon;
+use crate::model::ModelReconMeta;
+use crate::store::DataStore;
+use crate::store::DataStoreMeta;
+use crate::store::DataStoreReader;
+use crate::store::key_position::KeyPositionCollection;
+use crate::store::key_position::KeyPositionRange;
+use crate::store::key_position::KeyT;
 
 
 #[derive(Debug, Clone)]
@@ -27,13 +35,14 @@ impl fmt::Display for OutofCoverageError {
 
 impl Error for OutofCoverageError {}
 
+#[derive(Debug)]
 pub struct PiecewiseIndex {
-  bstore: BlockStore,
+  data_store: Box<dyn DataStore>,
   model_serde: Box<dyn ModelRecon>,
 }
 
 impl PiecewiseIndex {
-  fn predict_from_reader(&self, reader: BlockStoreReader, key: &KeyT) -> Result<KeyPositionRange, Box<dyn Error>> {
+  fn predict_from_reader(&self, reader: Box<dyn DataStoreReader>, key: &KeyT) -> GResult<KeyPositionRange> {
     for model_buffer in reader.iter() {
       let model = self.model_serde.reconstruct(model_buffer)?;
       let coverage = model.coverage();
@@ -49,19 +58,15 @@ impl PiecewiseIndex {
 }
 
 impl Index for PiecewiseIndex {
-  fn predict(&self, key: &KeyT) -> Result<KeyPositionRange, Box<dyn Error>> {
-    let reader = self.bstore.read_all()?;
+  fn predict(&self, key: &KeyT) -> GResult<KeyPositionRange> {
+    let reader = self.data_store.read_all()?;
     self.predict_from_reader(reader, key)
-  }
-
-  fn estimate_cost(&self, _profile: &dyn StorageProfile) -> Duration {
-    panic!("TODO")
   }
 }
 
 impl PartialIndex for PiecewiseIndex {
-  fn predict_within(&self, kr: &KeyPositionRange) -> Result<KeyPositionRange, Box<dyn Error>> {
-    let reader = self.bstore.read_within(kr.offset, kr.length)?;
+  fn predict_within(&self, kr: &KeyPositionRange) -> GResult<KeyPositionRange> {
+    let reader = self.data_store.read_within(kr.offset, kr.length)?;
     self.predict_from_reader(reader, &kr.key)
   }
 }
@@ -69,24 +74,104 @@ impl PartialIndex for PiecewiseIndex {
 impl PiecewiseIndex {
   pub fn build(
     mut model_builder: Box<dyn ModelBuilder>,
-    mut bstore: BlockStore,
+    mut data_store: Box<dyn DataStore>,
     kps: &KeyPositionCollection
-  ) -> GResult<(PiecewiseIndex, KeyPositionCollection)> {
-    let mut bwriter = bstore.begin_write()?;
-    for kp in kps.iter() {
-      if let Some(model_kp) = model_builder.consume(kp)? {
-        bwriter.write(&model_kp)?;
+  ) -> GResult<(PiecewiseIndex, KeyPositionCollection)> {  // maybe remove?
+    let mut data_writer = data_store.begin_write()?;
+    for kpr in kps.range_iter() {
+      if let Some(model_kb) = model_builder.consume(&kpr)? {
+        data_writer.write(&model_kb)?;
       }
     }
 
     // finalize last bits of model
-    let (maybe_model_kp, model_serde) = model_builder.finalize()?;
-    if let Some(model_kp) = maybe_model_kp {
-        bwriter.write(&model_kp)?;
+    let BuilderFinalReport {
+      maybe_model_kb,
+      serde: model_serde,
+      model_loads: _,
+    } = model_builder.finalize()?;
+    if let Some(model_kb) = maybe_model_kb {
+        data_writer.write(&model_kb)?;
     }
 
     // commit write to get resulting key-position collection and return
-    let new_kps = bwriter.commit()?;
-    Ok((PiecewiseIndex{ bstore, model_serde }, new_kps))
+    let new_kps = data_writer.commit()?;
+    log::info!(
+      "{:?}: built {} buffers, total {} bytes",
+      data_store,
+      new_kps.len(),
+      new_kps.total_bytes(),
+    );
+    Ok((PiecewiseIndex{ data_store, model_serde }, new_kps))
+  }
+
+  pub fn craft(
+    model_draft: ModelDraft,
+    mut data_store: Box<dyn DataStore>,
+  ) -> GResult<(PiecewiseIndex, KeyPositionCollection)> {
+    let mut data_writer = data_store.begin_write()?;
+
+    // write the model key buffers
+    let (model_kbs, model_serde) = (model_draft.key_buffers, model_draft.serde);
+    for model_kb in model_kbs {
+      data_writer.write(&model_kb)?;
+    }
+
+    // commit write to get resulting key-position collection and return
+    let new_kps = data_writer.commit()?;
+    log::info!(
+      "{:?}: crafted {} buffers, total {} bytes",
+      data_store,
+      new_kps.len(),
+      new_kps.total_bytes(),
+    );
+    Ok((PiecewiseIndex{ data_store, model_serde }, new_kps))
+  }
+}
+
+
+#[derive(Serialize, Deserialize)]
+pub struct PiecewiseIndexMeta {
+  data_store: DataStoreMeta,
+  model_serde: ModelReconMeta,
+}
+
+impl IndexMetaserde for PiecewiseIndex {  // for Metaserde
+  fn to_meta(&self, ctx: &mut Context) -> GResult<IndexMeta> {
+    Ok(IndexMeta::Piecewise {
+      meta: PiecewiseIndexMeta {
+        data_store: self.data_store.to_meta(ctx)?,
+        model_serde: self.model_serde.to_meta(ctx)?,
+      }
+    })
+  }
+}
+
+impl PiecewiseIndex {  // for Metaserde
+  pub fn from_meta(meta: PiecewiseIndexMeta, ctx: &Context) -> GResult<PiecewiseIndex> {
+    Ok(PiecewiseIndex {
+      data_store: DataStoreMeta::from_meta(meta.data_store, ctx)?,
+      model_serde: ModelReconMeta::from_meta(meta.model_serde, ctx)?,
+    })
+  }
+}
+
+impl PartialIndexMetaserde for PiecewiseIndex {  // for Metaserde
+  fn to_meta_partial(&self, ctx: &mut Context) -> GResult<PartialIndexMeta> {
+    Ok(PartialIndexMeta::Piecewise {
+      meta: PiecewiseIndexMeta {
+        data_store: self.data_store.to_meta(ctx)?,
+        model_serde: self.model_serde.to_meta(ctx)?,
+      }
+    })
+  }
+}
+
+impl PiecewiseIndex {  // for Metaserde
+  pub fn from_meta_partial(meta: PiecewiseIndexMeta, ctx: &Context) -> GResult<PiecewiseIndex> {
+    Ok(PiecewiseIndex {
+      data_store: DataStoreMeta::from_meta(meta.data_store, ctx)?,
+      model_serde: ModelReconMeta::from_meta(meta.model_serde, ctx)?,
+    })
   }
 }

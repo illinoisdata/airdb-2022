@@ -1,3 +1,4 @@
+use std::cmp;
 use std::cmp::Ordering;
 use std::ops::Index;
 use std::ops::Sub;
@@ -5,7 +6,7 @@ use std::ops::Sub;
 
 /* Key-position */
 
-pub type KeyT = i64;
+pub type KeyT = u64;
 pub type PositionT = usize;
 pub const KEY_LENGTH: usize = std::mem::size_of::<KeyT>();
 pub const POSITION_LENGTH: usize = std::mem::size_of::<PositionT>();
@@ -16,21 +17,39 @@ pub struct KeyPosition {
   pub position: PositionT,
 }
 
-impl KeyPosition {
-  pub fn interpolate_with(&self, other: &KeyPosition, key: &KeyT) -> PositionT {
-    self.position + (
-      ((*key - self.key) as f64
-      / (other.key - self.key) as f64)
-      * (other.position - self.position) as f64
-    ).floor() as PositionT
+struct KPDirection {
+  x: f64,
+  y: f64,
+}
+
+impl KPDirection {
+  pub fn new(kp_1: &KeyPosition, kp_2: &KeyPosition) -> KPDirection {
+    KPDirection {
+      x: kp_2.key as f64 - kp_1.key as f64,
+      y: kp_2.position as f64 - kp_1.position as f64,
+    }
   }
 
-  pub fn cross_product(&self, other: &KeyPosition) -> f64 {
-    self.key as f64 * other.position as f64 - self.position as f64 * other.key as f64
+  pub fn cross_product(&self, other: &KPDirection) -> f64 {
+    (self.x * other.y) - (self.y * other.x)
+  }
+}
+
+impl KeyPosition {
+  pub fn interpolate_with(&self, other: &KeyPosition, key: &KeyT) -> PositionT {
+    if self.key == other.key {
+      self.position
+    } else {
+      self.position + (
+        ((*key - self.key) as f64
+        / (other.key - self.key) as f64)
+        * (other.position as f64 - self.position as f64)
+      ).floor() as PositionT 
+    }
   }
 
   pub fn is_lower_slope_than(&self, other: &KeyPosition, pov: &KeyPosition) -> bool {
-    (self - pov).cross_product(&(other - pov)) > 0.0
+    KPDirection::new(self, pov).cross_product(&KPDirection::new(other, pov)) > 0.0 
   }
 }
 
@@ -55,6 +74,16 @@ pub struct KeyPositionRange {
   pub length: PositionT,
 }
 
+impl KeyPositionRange {
+  pub fn from_bound(key: KeyT, left_offset: PositionT, right_offset: PositionT) -> KeyPositionRange {
+    KeyPositionRange {
+      key,
+      offset: left_offset,
+      length: right_offset - left_offset,
+    }
+  }
+}
+
 
 /* Key interval */
 
@@ -75,6 +104,14 @@ impl KeyInterval {
 
   pub fn cover(&self, key: &KeyT) -> bool {
     self.left_key <= *key && *key <= self.right_key
+  }
+
+  pub fn intersect(&self, other: &KeyInterval) -> KeyInterval {
+    // "empty" interval represented by criss-crossing boundary keys
+    KeyInterval {
+      left_key: cmp::max(self.left_key, other.left_key),
+      right_key: cmp::min(self.right_key, other.right_key),
+    }
   }
 }
 
@@ -106,17 +143,25 @@ impl KeyPositionCollection {
     self.kps.push(KeyPosition{ key, position })
   }
 
+  pub fn set_position_range(&mut self, start_position: usize, end_position: usize) {
+    self.start_position = start_position;
+    self.end_position = end_position;
+  }
+
   pub fn len(&self) -> usize {
     self.kps.len()
   } 
+
+  pub fn total_bytes(&self) -> usize {
+    self.end_position - self.start_position
+  }
 
   pub fn is_empty(&self) -> bool {
     self.kps.is_empty()
   }
 
-  pub fn set_position_range(&mut self, start_position: usize, end_position: usize) {
-    self.start_position = start_position;
-    self.end_position = end_position;
+  pub fn whole_range(&self) -> (PositionT, PositionT) {
+    (self.start_position, self.end_position)
   }
 
   pub fn position_for(&self, key: KeyT) -> Result<usize, &str> {

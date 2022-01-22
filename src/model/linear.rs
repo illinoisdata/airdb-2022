@@ -1,100 +1,157 @@
 use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
+use serde::{Serialize, Deserialize};
 use std::error::Error;
 use std::cmp;
 use std::io;
 
 use crate::common::error::GResult;
+use crate::meta::Context;
+use crate::model::BuilderAsDrafter;
+use crate::model::BuilderFinalReport;
 use crate::model::MaybeKeyBuffer;
 use crate::model::Model;
 use crate::model::ModelBuilder;
+use crate::model::ModelDrafter;
 use crate::model::ModelRecon;
-use crate::db::key_buffer::KeyBuffer;
-use crate::db::key_position::KEY_LENGTH;
-use crate::db::key_position::KeyInterval;
-use crate::db::key_position::KeyPosition;
-use crate::db::key_position::KeyPositionRange;
-use crate::db::key_position::KeyT;
-use crate::db::key_position::POSITION_LENGTH;
-use crate::db::key_position::PositionT;
+use crate::model::ModelReconMeta;
+use crate::model::ModelReconMetaserde;
+use crate::model::MultipleDrafter;
+use crate::store::key_buffer::KeyBuffer;
+use crate::store::key_position::KEY_LENGTH;
+use crate::store::key_position::KeyInterval;
+use crate::store::key_position::KeyPosition;
+use crate::store::key_position::KeyPositionRange;
+use crate::store::key_position::KeyT;
+use crate::store::key_position::POSITION_LENGTH;
+use crate::store::key_position::PositionT;
 
 
 /* The Model */
 
-struct LowerLinearModel {
+#[derive(Debug)]
+struct LinearModel {
   left_kp: KeyPosition,
   right_kp: KeyPosition,
-  max_error: PositionT,
 }
 
-impl Model for LowerLinearModel {
+impl LinearModel {
   fn coverage(&self) -> KeyInterval {
     KeyInterval{ left_key: self.left_kp.key, right_key: self.right_kp.key }
   }
 
+  fn evaluate(&self, key: &KeyT) -> PositionT {
+    // PANIC: this would overflow if key is outside of the coverage...
+    self.left_kp.interpolate_with(&self.right_kp, key)
+  }
+}
+
+// TODO: can save 50% space if ranges are equal
+#[derive(Debug)]
+struct DoubleLinearModel {
+  lower_line: LinearModel,
+  upper_line: LinearModel,
+}
+
+impl Model for DoubleLinearModel {
+  fn coverage(&self) -> KeyInterval {
+    self.lower_line.coverage().intersect(&self.upper_line.coverage())
+  }
+
   fn predict(&self, key: &KeyT) -> KeyPositionRange {
-    if self.left_kp.key == self.right_kp.key {
-      KeyPositionRange{
-        key: *key,
-        offset: self.left_kp.position,
-        length: self.max_error,
-      }
-    } else { 
-      KeyPositionRange{
-        key: *key,
-        offset: self.left_kp.interpolate_with(&self.right_kp, key),
-        length: self.max_error,
-      }
-    }
+    // PANIC: this would overflow if key is outside of the coverage...
+    let left_offset = self.lower_line.evaluate(key);
+    let right_offset = self.upper_line.evaluate(key);
+    KeyPositionRange::from_bound(*key, left_offset, right_offset)
   }
 }
 
 
 /* Serialization */
 
-struct LowerLinearModelSerde {
-  max_error: PositionT,
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct DoubleLinearModelRecon {
+  max_load: Option<usize>,
 }
 
-impl LowerLinearModelSerde {
-  fn new() -> LowerLinearModelSerde {
-    LowerLinearModelSerde{ max_error: 0 }
+impl DoubleLinearModelRecon {
+  fn new() -> DoubleLinearModelRecon {
+    DoubleLinearModelRecon { max_load: None }
   }
 
-  fn sketch(&mut self, llm: &LowerLinearModel) -> io::Result<Vec<u8>> {
-    // update max error
-    self.max_error = cmp::max(self.max_error, llm.max_error);
-
+  fn sketch(&mut self, dlm: &DoubleLinearModel) -> io::Result<Vec<u8>> {
     // turn the model into a buffer
     let mut model_buffer = vec![];
-    model_buffer.write_int::<BigEndian>(llm.left_kp.key, KEY_LENGTH)?;
-    model_buffer.write_uint::<BigEndian>(llm.left_kp.position as u64, POSITION_LENGTH)?;
-    model_buffer.write_int::<BigEndian>(llm.right_kp.key, KEY_LENGTH)?;
-    model_buffer.write_uint::<BigEndian>(llm.right_kp.position as u64, POSITION_LENGTH)?;
+    model_buffer.write_uint::<BigEndian>(dlm.lower_line.left_kp.key, KEY_LENGTH)?;
+    model_buffer.write_uint::<BigEndian>(dlm.lower_line.left_kp.position as u64, POSITION_LENGTH)?;
+    model_buffer.write_uint::<BigEndian>(dlm.lower_line.right_kp.key, KEY_LENGTH)?;
+    model_buffer.write_uint::<BigEndian>(dlm.lower_line.right_kp.position as u64, POSITION_LENGTH)?;
+    model_buffer.write_uint::<BigEndian>(dlm.upper_line.left_kp.key, KEY_LENGTH)?;
+    model_buffer.write_uint::<BigEndian>(dlm.upper_line.left_kp.position as u64, POSITION_LENGTH)?;
+    model_buffer.write_uint::<BigEndian>(dlm.upper_line.right_kp.key, KEY_LENGTH)?;
+    model_buffer.write_uint::<BigEndian>(dlm.upper_line.right_kp.position as u64, POSITION_LENGTH)?;
     Ok(model_buffer)
+  }
+
+  fn set_max_load(&mut self, max_load: usize) {
+    self.max_load = Some(max_load)
   }
 }
 
-impl ModelRecon for LowerLinearModelSerde {
+impl ModelRecon for DoubleLinearModelRecon {
   fn reconstruct(&self, buffer: &[u8]) -> Result<Box<dyn Model>, Box<dyn Error>> {
     let mut model_buffer = io::Cursor::new(buffer);
-    Ok(Box::new(LowerLinearModel {
-      left_kp: KeyPosition {
-        key: model_buffer.read_int::<BigEndian>(KEY_LENGTH)?,
-        position: model_buffer.read_uint::<BigEndian>(POSITION_LENGTH)? as PositionT,
+    let model = DoubleLinearModel {
+      lower_line: LinearModel {
+        left_kp: KeyPosition {
+          key: model_buffer.read_uint::<BigEndian>(KEY_LENGTH)?,
+          position: model_buffer.read_uint::<BigEndian>(POSITION_LENGTH)? as PositionT,
+        },
+        right_kp: KeyPosition {
+          key: model_buffer.read_uint::<BigEndian>(KEY_LENGTH)?,
+          position: model_buffer.read_uint::<BigEndian>(POSITION_LENGTH)? as PositionT,
+        }, 
       },
-      right_kp: KeyPosition {
-        key: model_buffer.read_int::<BigEndian>(KEY_LENGTH)?,
-        position: model_buffer.read_uint::<BigEndian>(POSITION_LENGTH)? as PositionT,
+      upper_line: LinearModel {
+        left_kp: KeyPosition {
+          key: model_buffer.read_uint::<BigEndian>(KEY_LENGTH)?,
+          position: model_buffer.read_uint::<BigEndian>(POSITION_LENGTH)? as PositionT,
+        },
+        right_kp: KeyPosition {
+          key: model_buffer.read_uint::<BigEndian>(KEY_LENGTH)?,
+          position: model_buffer.read_uint::<BigEndian>(POSITION_LENGTH)? as PositionT,
+        }, 
       },
-      max_error: self.max_error,
-    }))
+    };
+    Ok(Box::new(model))
+  }
+}
+
+
+pub type DoubleLinearModelReconMeta = DoubleLinearModelRecon;
+
+impl ModelReconMetaserde for DoubleLinearModelRecon {  // for Metaserde
+  fn to_meta(&self, _ctx: &mut Context) -> GResult<ModelReconMeta> {
+    Ok(ModelReconMeta::DoubleLinear{ meta: self.clone() })
+  }
+}
+
+impl DoubleLinearModelRecon {  // for Metaserde
+  pub fn from_meta(meta: DoubleLinearModelReconMeta, _ctx: &Context) -> GResult<DoubleLinearModelRecon> {
+    Ok(meta)
   }
 }
 
 
 /* Builder */
 
-#[derive(Debug)]
+fn sort_anchor<'a>(anc_1: &'a KeyPosition, anc_2: &'a KeyPosition, pov: &'a KeyPosition) -> (&'a KeyPosition, &'a KeyPosition) {
+  if anc_1.is_lower_slope_than(anc_2, pov) {
+    (anc_1, anc_2)
+  } else {
+    (anc_2, anc_1)
+  }
+}
+
 struct Corridor {
   key: KeyT,
   lower_kp: KeyPosition,
@@ -113,7 +170,12 @@ impl Corridor {
     }
   }
 
-  fn top_anchor(&self, pov: &KeyPosition) -> KeyPosition {
+  fn lower_anchor(&self, pov: &KeyPosition) -> KeyPosition {
+    let lower_position = pov.interpolate_with(&self.lower_kp, &self.key);
+    KeyPosition { key: self.key, position: lower_position }
+  }
+
+  fn upper_anchor(&self, pov: &KeyPosition) -> KeyPosition {
     let upper_position = pov.interpolate_with(&self.upper_kp, &self.key);
     KeyPosition { key: self.key, position: upper_position }
   }
@@ -129,90 +191,158 @@ impl Corridor {
   }
 }
 
-pub struct LowerLinearGreedyCorridorBuilder {
-  serde: LowerLinearModelSerde,
-  cur_anc: Option<KeyPosition>,
-  corridor: Option<Corridor>,
+pub struct DoubleLinearGreedyCorridorBuilder {
   max_error: PositionT,
+  max_length: PositionT,
+  serde: DoubleLinearModelRecon,
+  lower_pov: Option<KeyPosition>,
+  lower_corridor: Option<Corridor>,
+  upper_pov: Option<KeyPosition>,
+  upper_corridor: Option<Corridor>,
 }
 
-
-fn sort_anchor<'a>(anc_1: &'a KeyPosition, anc_2: &'a KeyPosition, pov: &'a KeyPosition) -> (&'a KeyPosition, &'a KeyPosition) {
-  if anc_1.is_lower_slope_than(anc_2, pov) {
-    (anc_1, anc_2)
-  } else {
-    (anc_2, anc_1)
-  }
-}
-
-impl LowerLinearGreedyCorridorBuilder {
-  pub fn new(max_error: PositionT) -> LowerLinearGreedyCorridorBuilder {
-    LowerLinearGreedyCorridorBuilder {
-      serde: LowerLinearModelSerde::new(),
-      cur_anc: None,
-      corridor: None,
+impl DoubleLinearGreedyCorridorBuilder {
+  pub fn new(max_error: PositionT) -> DoubleLinearGreedyCorridorBuilder {
+    DoubleLinearGreedyCorridorBuilder {
       max_error,
+      max_length: 0,
+      serde: DoubleLinearModelRecon::new(),
+      lower_pov: None,
+      lower_corridor: None,
+      upper_pov: None,
+      upper_corridor: None,
     }
   }
 
   fn generate_segment(&mut self) -> GResult<MaybeKeyBuffer> {
-    match &self.cur_anc {
+    let lower_line = match &self.lower_pov {
       Some(left_kp) => {
-        let last_model = match &self.corridor {
+        match &self.lower_corridor {
           Some(corridor) => {
-            let right_kp = corridor.top_anchor(left_kp);
-            LowerLinearModel { left_kp: left_kp.clone(), right_kp, max_error: self.max_error }
+            let right_kp = corridor.upper_anchor(left_kp);  // <--- difference
+            LinearModel { left_kp: left_kp.clone(), right_kp }
           }
-          None => LowerLinearModel { left_kp: left_kp.clone(), right_kp: left_kp.clone(), max_error: self.max_error },
-        };
-        Ok(Some(KeyBuffer{ key: left_kp.key, buffer: self.serde.sketch(&last_model)? }))
+          None => LinearModel { left_kp: left_kp.clone(), right_kp: left_kp.clone() },
+        }
       },
-      None => Ok(None),
-    }
+      None => return Ok(None),
+    };
+    let upper_line = match &self.upper_pov {
+      Some(left_kp) => {
+        match &self.upper_corridor {
+          Some(corridor) => {
+            let right_kp = corridor.lower_anchor(left_kp);  // <--- difference
+            LinearModel { left_kp: left_kp.clone(), right_kp }
+          }
+          None => LinearModel { left_kp: left_kp.clone(), right_kp: left_kp.clone() },
+        }
+      },
+      None => return Ok(None),
+    };
+    let dlinear_model = DoubleLinearModel { lower_line, upper_line };
+    let dlinear_buffer = self.serde.sketch(&dlinear_model)?;
+    Ok(Some(KeyBuffer{ key: dlinear_model.lower_line.left_kp.key, buffer: dlinear_buffer }))
   }
 }
 
-impl ModelBuilder for LowerLinearGreedyCorridorBuilder {
-  fn consume(&mut self, kp: &KeyPosition) -> GResult<MaybeKeyBuffer> {
-    match &self.cur_anc {
-      Some(pov) => {
-        // compute new upper and lower anchors
-        let lower_kp = KeyPosition{ key: kp.key, position: kp.position.saturating_sub(self.max_error) };
-        let upper_kp = KeyPosition{ key: kp.key, position: kp.position };
-        let kp_corridor = Corridor{ key: kp.key, lower_kp, upper_kp };
-        let new_corridor = match &self.corridor {
-          Some(corridor) => corridor.intersect(&kp_corridor, pov),
-          None => kp_corridor,
+impl ModelBuilder for DoubleLinearGreedyCorridorBuilder {
+  fn consume(&mut self, kpr: &KeyPositionRange) -> GResult<MaybeKeyBuffer> {
+    // update largest data for load calculation
+    self.max_length = cmp::max(self.max_length, kpr.length);
+
+    // update pov + corridor states
+    match &self.lower_pov {
+      Some(lower_pov) => {
+        let upper_pov = self.upper_pov.as_ref().expect("Bug: out-of-sync lower and upper povs");
+
+        // Update lower corridor
+        let new_lower_corridor = {
+          let lower_kp = KeyPosition{ key: kpr.key, position: kpr.offset.saturating_sub(self.max_error) };
+          let upper_kp = KeyPosition{ key: kpr.key, position: kpr.offset };
+          let kp_corridor = Corridor{ key: kpr.key, lower_kp, upper_kp };
+          match &self.lower_corridor {
+            Some(corridor) => corridor.intersect(&kp_corridor, lower_pov),
+            None => kp_corridor,
+          }
+        };
+        let new_upper_corridor = {
+          let upper_offset =  kpr.offset + kpr.length;
+          let lower_kp = KeyPosition{ key: kpr.key, position: upper_offset };
+          let upper_kp = KeyPosition{ key: kpr.key, position: upper_offset + self.max_error };
+          let kp_corridor = Corridor{ key: kpr.key, lower_kp, upper_kp };
+          match &self.upper_corridor {
+            Some(corridor) => corridor.intersect(&kp_corridor, upper_pov),
+            None => kp_corridor,
+          }
         };
 
-        if new_corridor.is_valid(pov) {
+        if new_lower_corridor.is_valid(lower_pov) && new_upper_corridor.is_valid(upper_pov) {
           // ok to include
-          self.corridor = Some(new_corridor);
+          self.lower_corridor = Some(new_lower_corridor);
+          self.upper_corridor = Some(new_upper_corridor);
           Ok(None)
         } else {
           // including this point would violate the constraint
           let new_buffer = self.generate_segment()?;
 
           // restart new segment
-          self.cur_anc = Some(KeyPosition { key: kp.key, position: kp.position });
-          self.corridor = None;
+          self.lower_pov = Some(KeyPosition{ key: kpr.key, position: kpr.offset });
+          self.upper_pov = Some(KeyPosition{ key: kpr.key, position: kpr.offset + kpr.length + self.max_error });
+          self.lower_corridor = None;
+          self.upper_corridor = None;
 
           Ok(new_buffer)
         }
       },
       None => {
-        self.cur_anc = Some(KeyPosition { key: kp.key, position: kp.position });
+        assert!(self.upper_pov.is_none());
+        self.lower_pov = Some(KeyPosition{ key: kpr.key, position: kpr.offset });
+        self.upper_pov = Some(KeyPosition{ key: kpr.key, position: kpr.offset + kpr.length + self.max_error });
         Ok(None)
       },
     }
   }
 
-  fn finalize(mut self: Box<Self>) -> GResult<(MaybeKeyBuffer, Box<dyn ModelRecon>)> {
+  fn finalize(mut self: Box<Self>) -> GResult<BuilderFinalReport> {
     let maybe_last_kb = self.generate_segment()?;
-    Ok((maybe_last_kb, Box::new(self.serde)))
+    self.serde.set_max_load(self.max_length + (2 * self.max_error));
+    Ok(BuilderFinalReport {
+      maybe_model_kb: maybe_last_kb,
+      serde: Box::new(self.serde),
+      model_loads: vec![self.max_length + (2 * self.max_error)],
+    })
   }
 }
 
+impl DoubleLinearGreedyCorridorBuilder {
+  fn drafter(max_error: usize) -> Box<dyn ModelDrafter> {
+    let dlm_producer = Box::new(
+      move || {
+        Box::new(DoubleLinearGreedyCorridorBuilder::new(max_error)) as Box<dyn ModelBuilder>
+      });
+    Box::new(BuilderAsDrafter::wrap(dlm_producer))
+  }
+}
+
+
+/* Drafter */
+
+// drafter that tries models with all these max errors and picks cheapest one
+// it offers different choices of linear builders
+pub struct DoubleLinearMultipleDrafter;
+
+impl DoubleLinearMultipleDrafter {
+  pub fn exponentiation(low_error: PositionT, high_error: PositionT, exponent: f64) -> MultipleDrafter {
+    let mut dlm_drafters = Vec::new();
+    let mut current_error = low_error;
+    while current_error < high_error {
+      dlm_drafters.push(DoubleLinearGreedyCorridorBuilder::drafter(current_error));
+      current_error = ((current_error as f64) * exponent) as PositionT;
+    }
+    dlm_drafters.push(DoubleLinearGreedyCorridorBuilder::drafter(high_error));
+    MultipleDrafter::from(dlm_drafters)
+  }
+}
 
 
 /* Tests */
@@ -221,102 +351,56 @@ impl ModelBuilder for LowerLinearGreedyCorridorBuilder {
 mod tests {
   use super::*;
 
-  fn test_same_model(model_1: &Box<dyn Model>, model_2: &Box<LowerLinearModel>) {
+  fn test_same_model(model_1: &Box<dyn Model>, model_2: &Box<DoubleLinearModel>) {
     // test coverage
     assert_eq!(model_1.coverage(), model_2.coverage(), "Models have different coverage");
+    let coverage = model_1.coverage();
 
     // test predict
-    const TEST_KEYS: [KeyT; 14] = [
-      -50,
-      100,
-      200,
-      1,
-      2,
-      4,
-      8,
-      16,
-      32,
-      64,
-      128,
-      256,
-      512,
-      1024,
-    ];
-    for test_key in TEST_KEYS {
+    for test_key in coverage.left_key..coverage.right_key {
       assert_eq!(
         model_1.predict(&test_key),
         model_2.predict(&test_key),
         "Models predict differently"
-      );
+      ); 
     }
   }
   
   #[test]
   fn serde_test() -> GResult<()> {
-    let mut llm_serde = LowerLinearModelSerde::new();
-    let llm = Box::new(LowerLinearModel {
-      left_kp: KeyPosition{ key: -123, position: 456718932 },
-      right_kp: KeyPosition{ key: 456, position: 743819208 },
-      max_error: 100,
+    let mut dlm_serde = DoubleLinearModelRecon::new();
+    let dlm = Box::new(DoubleLinearModel {
+      lower_line: LinearModel {
+        left_kp: KeyPosition { key: 123, position: 4567 },
+        right_kp: KeyPosition { key: 456, position: 7438 }, 
+      },
+      upper_line: LinearModel {
+        left_kp: KeyPosition { key: 123, position: 4570 },
+        right_kp: KeyPosition { key: 456, position: 7499 }, 
+      },
     });
 
     // sketch this model
-    let llm_buffer = llm_serde.sketch(&llm)?;
-    assert_eq!(llm_serde.max_error, llm.max_error);
-    assert!(llm_buffer.len() > 0);
+    let dlm_buffer = dlm_serde.sketch(&dlm)?;
+    assert!(dlm_buffer.len() > 0);
 
     // reconstruct
-    let llm_recon = llm_serde.reconstruct(&llm_buffer)?;
-    test_same_model(&llm_recon, &llm);
-
-    Ok(())
-  }
-  
-  #[test]
-  fn sketch_state_test() -> Result<(), Box<dyn Error>> {
-    let mut llm_serde = LowerLinearModelSerde::new();
-    let mut llm_1 = Box::new(LowerLinearModel {
-      left_kp: KeyPosition{ key: -999, position: 1000 },
-      right_kp: KeyPosition{ key: 999, position: 10000 },
-      max_error: 123,
-    });
-    let llm_2 = Box::new(LowerLinearModel {
-      left_kp: KeyPosition{ key: -888, position: 1000 },
-      right_kp: KeyPosition{ key: 888, position: 10000 },
-      max_error: 456,  // MAX ERROR
-    });
-    let mut llm_3 = Box::new(LowerLinearModel {
-      left_kp: KeyPosition{ key: -777, position: 1000 },
-      right_kp: KeyPosition{ key: 777, position: 10000 },
-      max_error: 44,
-    });
-
-    // sketch many models
-    let llm_buffer_1 = llm_serde.sketch(&llm_1)?;
-    let llm_buffer_2 = llm_serde.sketch(&llm_2)?;
-    let llm_buffer_3 = llm_serde.sketch(&llm_3)?;
-    assert_eq!(llm_serde.max_error, 456);
-
-    // reconstruct
-    llm_1.max_error = 456;  // update max error
-    llm_3.max_error = 456;  // update max error
-    test_same_model(&llm_serde.reconstruct(&llm_buffer_1)?, &llm_1);
-    test_same_model(&llm_serde.reconstruct(&llm_buffer_2)?, &llm_2);
-    test_same_model(&llm_serde.reconstruct(&llm_buffer_3)?, &llm_3);
+    let dlm_recon = dlm_serde.reconstruct(&dlm_buffer)?;
+    test_same_model(&dlm_recon, &dlm);
 
     Ok(())
   }
 
-  fn generate_test_kps() -> [KeyPosition; 8] {
+  fn generate_test_kprs() -> [KeyPositionRange; 8] {
     [
-      KeyPosition{ key: -100, position: 0},
-      KeyPosition{ key: -50, position: 7},
-      KeyPosition{ key: 0, position: 10},
-      KeyPosition{ key: 5, position: 20},
-      KeyPosition{ key: 15, position: 40},
-      KeyPosition{ key: 25, position: 60},
-      KeyPosition{ key: 30, position: 70},
-      KeyPosition{ key: 31, position: 1000},
+      KeyPositionRange{ key: 0, offset: 0, length: 7},
+      KeyPositionRange{ key: 50, offset: 7, length: 3},
+      KeyPositionRange{ key: 100, offset: 10, length: 20},
+      KeyPositionRange{ key: 105, offset: 30, length: 20},
+      KeyPositionRange{ key: 110, offset: 50, length: 20},
+      KeyPositionRange{ key: 115, offset: 70, length: 20},
+      KeyPositionRange{ key: 120, offset: 90, length: 910},  // jump, should split here
+      KeyPositionRange{ key: 131, offset: 1000, length: 915},
     ]
   }
 
@@ -332,76 +416,106 @@ mod tests {
   
   #[test]
   fn greedy_corridor_test() -> Result<(), Box<dyn Error>> {
-    let kps = generate_test_kps();
-    let mut llm_builder = Box::new(LowerLinearGreedyCorridorBuilder::new(0));
+    let kprs = generate_test_kprs();
+    let mut dlm_builder = Box::new(DoubleLinearGreedyCorridorBuilder::new(0));
 
     // start adding points
-    let _model_buffer_0 = assert_none_buffer(llm_builder.consume(&kps[0])?);
-    let _model_buffer_1 = assert_none_buffer(llm_builder.consume(&kps[1])?);
-    let model_buffer_2 = assert_some_buffer(llm_builder.consume(&kps[2])?);
-    let _model_buffer_3 = assert_none_buffer(llm_builder.consume(&kps[3])?);
-    let _model_buffer_4 = assert_none_buffer(llm_builder.consume(&kps[4])?);
-    let _model_buffer_5 = assert_none_buffer(llm_builder.consume(&kps[5])?);
-    let _model_buffer_6 = assert_none_buffer(llm_builder.consume(&kps[6])?);
-    let model_buffer_7 = assert_some_buffer(llm_builder.consume(&kps[7])?);
+    let _model_kb_0 = assert_none_buffer(dlm_builder.consume(&kprs[0])?);
+    let _model_kb_1 = assert_none_buffer(dlm_builder.consume(&kprs[1])?);
+    let model_kb_2 = assert_some_buffer(dlm_builder.consume(&kprs[2])?);
+    let _model_kb_3 = assert_none_buffer(dlm_builder.consume(&kprs[3])?);
+    let _model_kb_4 = assert_none_buffer(dlm_builder.consume(&kprs[4])?);
+    let _model_kb_5 = assert_none_buffer(dlm_builder.consume(&kprs[5])?);
+    let model_kb_6 = assert_some_buffer(dlm_builder.consume(&kprs[6])?);
+    let _model_kb_7 = assert_none_buffer(dlm_builder.consume(&kprs[7])?);
 
     // finalize the builder
-    let (last_buffer, llm_serde) = llm_builder.finalize()?;
-    let model_buffer_8 = assert_some_buffer(last_buffer);
+    let BuilderFinalReport {
+      maybe_model_kb: last_buffer,
+      serde: dlm_serde,
+      model_loads: dlm_loads,
+    } = dlm_builder.finalize()?;
+    let model_kb_8 = assert_some_buffer(last_buffer);
+    assert_eq!(dlm_loads, vec![915]);
 
     // check buffers
-    test_same_model(&llm_serde.reconstruct(&model_buffer_2)?, &Box::new(LowerLinearModel {
-      left_kp: KeyPosition{ key: -100, position: 0 },
-      right_kp: KeyPosition{ key: -50, position: 7 },
-      max_error: 0,
+    test_same_model(&dlm_serde.reconstruct(&model_kb_2)?, &Box::new(DoubleLinearModel {
+      lower_line: LinearModel {
+        left_kp: KeyPosition { key: 0, position: 0 },
+        right_kp: KeyPosition { key: 50, position: 7 }, 
+      },
+      upper_line: LinearModel {
+        left_kp: KeyPosition { key: 0, position: 7 },
+        right_kp: KeyPosition { key: 50, position: 10 }, 
+      },
     }));
-    test_same_model(&llm_serde.reconstruct(&model_buffer_7)?, &Box::new(LowerLinearModel {
-      left_kp: KeyPosition{ key: 0, position: 10 },
-      right_kp: KeyPosition{ key: 30, position: 70 },
-      max_error: 0,
+    test_same_model(&dlm_serde.reconstruct(&model_kb_6)?, &Box::new(DoubleLinearModel {
+      lower_line: LinearModel {
+        left_kp: KeyPosition { key: 100, position: 10 },
+        right_kp: KeyPosition { key: 115, position: 70 }, 
+      },
+      upper_line: LinearModel {
+        left_kp: KeyPosition { key: 100, position: 30 },
+        right_kp: KeyPosition { key: 115, position: 90 }, 
+      },
     }));
-    test_same_model(&llm_serde.reconstruct(&model_buffer_8)?, &Box::new(LowerLinearModel {
-      left_kp: KeyPosition{ key: 31, position: 1000 },
-      right_kp: KeyPosition{ key: 31, position: 1000 },
-      max_error: 0,
+    test_same_model(&dlm_serde.reconstruct(&model_kb_8)?, &Box::new(DoubleLinearModel {
+      lower_line: LinearModel {
+        left_kp: KeyPosition { key: 120, position: 90 },
+        right_kp: KeyPosition { key: 131, position: 1000 }, 
+      },
+      upper_line: LinearModel {
+        left_kp: KeyPosition { key: 120, position: 1000 },
+        right_kp: KeyPosition { key: 131, position: 1915 }, 
+      },
     }));
     Ok(())
   }
   
   #[test]
   fn greedy_corridor_with_error_test() -> Result<(), Box<dyn Error>> {
-    let kps = generate_test_kps();
-    let mut llm_builder = Box::new(LowerLinearGreedyCorridorBuilder::new(5));
+    let kprs = generate_test_kprs();
+    let mut dlm_builder = Box::new(DoubleLinearGreedyCorridorBuilder::new(100));
 
     // start adding points
-    let _model_buffer_0 = assert_none_buffer(llm_builder.consume(&kps[0])?);
-    let _model_buffer_1 = assert_none_buffer(llm_builder.consume(&kps[1])?);
-    let _model_buffer_2 = assert_none_buffer(llm_builder.consume(&kps[2])?);
-    let model_buffer_3 = assert_some_buffer(llm_builder.consume(&kps[3])?);
-    let _model_buffer_4 = assert_none_buffer(llm_builder.consume(&kps[4])?);
-    let _model_buffer_5 = assert_none_buffer(llm_builder.consume(&kps[5])?);
-    let _model_buffer_6 = assert_none_buffer(llm_builder.consume(&kps[6])?);
-    let model_buffer_7 = assert_some_buffer(llm_builder.consume(&kps[7])?);
+    let _model_kb_0 = assert_none_buffer(dlm_builder.consume(&kprs[0])?);
+    let _model_kb_1 = assert_none_buffer(dlm_builder.consume(&kprs[1])?);
+    let _model_kb_2 = assert_none_buffer(dlm_builder.consume(&kprs[2])?);
+    let _model_kb_3 = assert_none_buffer(dlm_builder.consume(&kprs[3])?);
+    let _model_kb_4 = assert_none_buffer(dlm_builder.consume(&kprs[4])?);
+    let _model_kb_5 = assert_none_buffer(dlm_builder.consume(&kprs[5])?);
+    let model_kb_6 = assert_some_buffer(dlm_builder.consume(&kprs[6])?);
+    let _model_kb_7 = assert_none_buffer(dlm_builder.consume(&kprs[7])?);
 
     // finalize the builder
-    let (last_buffer, llm_serde) = llm_builder.finalize()?;
-    let model_buffer_8 = assert_some_buffer(last_buffer);
+    let BuilderFinalReport {
+      maybe_model_kb: last_buffer,
+      serde: dlm_serde,
+      model_loads: dlm_loads,
+    } = dlm_builder.finalize()?;
+    let model_kb_8 = assert_some_buffer(last_buffer);
+    assert_eq!(dlm_loads, vec![1115]);
 
     // check buffers
-    test_same_model(&llm_serde.reconstruct(&model_buffer_3)?, &Box::new(LowerLinearModel {
-      left_kp: KeyPosition{ key: -100, position: 0 },
-      right_kp: KeyPosition{ key: 0, position: 10 },
-      max_error: 5,
+    test_same_model(&dlm_serde.reconstruct(&model_kb_6)?, &Box::new(DoubleLinearModel {
+      lower_line: LinearModel {
+        left_kp: KeyPosition { key: 0, position: 0 },
+        right_kp: KeyPosition { key: 115, position: 11 }, 
+      },
+      upper_line: LinearModel {
+        left_kp: KeyPosition { key: 0, position: 107 },
+        right_kp: KeyPosition { key: 115, position: 90 }, 
+      },
     }));
-    test_same_model(&llm_serde.reconstruct(&model_buffer_7)?, &Box::new(LowerLinearModel {
-      left_kp: KeyPosition{ key: 5, position: 20 },
-      right_kp: KeyPosition{ key: 30, position: 70 },
-      max_error: 5,
-    }));
-    test_same_model(&llm_serde.reconstruct(&model_buffer_8)?, &Box::new(LowerLinearModel {
-      left_kp: KeyPosition{ key: 31, position: 1000 },
-      right_kp: KeyPosition{ key: 31, position: 1000 },
-      max_error: 5,
+    test_same_model(&dlm_serde.reconstruct(&model_kb_8)?, &Box::new(DoubleLinearModel {
+      lower_line: LinearModel {
+        left_kp: KeyPosition { key: 120, position: 90 },
+        right_kp: KeyPosition { key: 131, position: 1000 }, 
+      },
+      upper_line: LinearModel {
+        left_kp: KeyPosition { key: 120, position: 1100 },
+        right_kp: KeyPosition { key: 131, position: 1915 }, 
+      },
     }));
     Ok(())
   }

@@ -12,15 +12,19 @@ readme = "https://github.com/illinoisdata/airindex/blob/main/README.md"
 
 [dependencies]
 
+bson = "2.0.0"
 byteorder = "1.4.3"
+env_logger = "0.9.0"
+erased-serde = "0.3"
 flexbuffers = "2.0.0"
 itertools = "0.10.3"
+log = "0.4.14"
 num = "0.4.0"
 rand = "0.8.3"
-simple-error = "0.2.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0.133"
 serde_json = { version = "1.0" }
+simple-error = "0.2.3"
 structopt = { version = "0.3", default-features = false }
 tempdir = "0.3.7"
 tempfile = "3"
