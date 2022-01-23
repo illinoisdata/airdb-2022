@@ -21,6 +21,9 @@ itertools = "0.10.3"
 log = "0.4.14"
 num = "0.4.0"
 rand = "0.8.3"
+rand_pcg = "0.3.1"
+rayon = "1.5.1"
+sscanf = "0.1.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0.133"
 serde_json = { version = "1.0" }
@@ -32,3 +35,11 @@ tempfile = "3"
 [[bin]]
 name = "profile_storage"
 path = "src/bin/profile_storage.rs"
+
+[[bin]]
+name = "sosd_keyset"
+path = "src/bin/sosd_keyset.rs"
+
+[[bin]]
+name = "sosd_experiment"
+path = "src/bin/sosd_experiment.rs"

@@ -7,6 +7,7 @@ use std::time::Instant;
 use structopt::StructOpt;
 
 use airindex::common::error::GResult;
+use airindex::db::key_rank::read_keyset;
 use airindex::db::key_rank::SOSDRankDB;
 use airindex::index::hierarchical::BalanceStackIndexBuilder;
 use airindex::index::IndexBuilder;
@@ -38,7 +39,14 @@ pub struct Cli {
   #[structopt(long)]
   out_path: String,
 
-  /// dataset name [sosd]
+  /// action: build index
+  #[structopt(long)]
+  do_build: bool,
+  /// action: benchmark
+  #[structopt(long)]
+  do_benchmark: bool,
+
+  /// dataset name [blob]
   #[structopt(long)]
   dataset_name: String,
 
@@ -58,6 +66,9 @@ pub struct Cli {
   /// number of elements, in millions (typically 200, 400, 500, 800)
   #[structopt(long)]
   sosd_size: usize,
+  /// relative path from root_path to the sosd data blob
+  #[structopt(long)]
+  keyset_path: String,
 }
 
 
@@ -67,6 +78,7 @@ pub struct Cli {
 pub struct BenchmarkResult<'a> {
   setting: &'a Cli,
   time_measures: &'a [u128],
+  query_counts: &'a [usize],
 }
 
 
@@ -86,7 +98,6 @@ impl Experiment {
     });
     if let Some(path) = PathBuf::from(&args.db_path).parent() {
       context.storage.as_ref().unwrap().create(path)?;
-      println!("Created directory {:?}", path);
     }
     let db_meta_path = PathBuf::from(format!("{}_meta", args.db_path.clone()));
     Ok(Experiment {
@@ -105,7 +116,7 @@ impl Experiment {
     self.observe_kps(&data_kps, 10);
 
     // build index
-    let model_drafter = Box::new(DoubleLinearMultipleDrafter::exponentiation(32, 1_048_576, 2.0));
+    let model_drafter = Box::new(DoubleLinearMultipleDrafter::exponentiation(32, 1_048_576, 1.5));
     let index_builder = BalanceStackIndexBuilder::new(
       self.context.storage.as_ref().unwrap(),
       model_drafter,
@@ -115,24 +126,6 @@ impl Experiment {
     let index = index_builder.build_index(&data_kps)?;
     println!("Built index at {}: {:#?}", args.db_path, index);
     sosd_db.attach_index(index);
-
-    // // try search
-    // println!("Search: {:?}", sosd_db.rank_of(0)?);
-    // println!("Search: {:?}", sosd_db.rank_of(372893832698311040)?);
-    // println!("Search: {:?}", sosd_db.rank_of(745859168026519040)?);
-    // println!("Search: {:?}", sosd_db.rank_of(1119385857210763072)?);
-    // println!("Search: {:?}", sosd_db.rank_of(1502331687042731776)?);
-    // println!("Search: {:?}", sosd_db.rank_of(1920975674233238400)?);
-    // println!("Search: {:?}", sosd_db.rank_of(2443914903724880384)?);
-    // println!("Search: {:?}", sosd_db.rank_of(3116196522710484992)?);
-    // println!("Search: {:?}", sosd_db.rank_of(4031396439579815424)?);
-    // println!("Search: {:?}", sosd_db.rank_of(5349720687235716608)?);
-    // println!("Search: {:?}", sosd_db.rank_of(1)?);
-    // println!("Search: {:?}", sosd_db.rank_of(2)?);
-    // if let Some(kr) = sosd_db.rank_of(372893832698311040)? {
-    //   assert_eq!(kr.key, 372893832698311040);
-    //   assert_eq!(kr.rank, 20000000); 
-    // }
 
     // turn into serializable form
     let mut new_ctx = Context::new();
@@ -200,18 +193,36 @@ impl Experiment {
 
   // TODO: multiple time?
 
-  pub fn benchmark(&self) -> GResult<Vec<u128>> {
-    let test_keys = 0..10000;  // TODO: read from file
+  pub fn benchmark(&self, args: &Cli) -> GResult<(Vec<u128>, Vec<usize>)> {
+    // read keyset
+    let test_keyset = read_keyset(args.keyset_path.clone())?;
 
+    // start the clock and begin db/index reconstruction
+    let mut time_measures = Vec::new();
+    let mut query_counts = Vec::new();
+    let mut count_milestone = 1;
+    let freq_mul: f64 = 1.1;
     let start_time = Instant::now();
     let sosd_db = self.reload()?;
-    let mut time_measures = Vec::new();
-    for test_key in test_keys {
-      let test_rank = sosd_db.rank_of(test_key);
-      assert!(test_rank.is_ok());
-      time_measures.push(start_time.elapsed().as_nanos())
+    for (idx, test_kr) in test_keyset.iter().enumerate() {
+      let rcv_kr = sosd_db.rank_of(test_kr.key)?
+        .unwrap_or_else(|| panic!("Existing key {} not found", test_kr.key));
+      assert_eq!(rcv_kr.key, test_kr.key);
+      assert_eq!(rcv_kr.rank, test_kr.rank);
+      if idx + 1 == count_milestone || idx + 1 == test_keyset.len() {
+        let time_elapsed = start_time.elapsed();
+        time_measures.push(time_elapsed.as_nanos());
+        query_counts.push(count_milestone);
+        log::info!(
+            "t= {:?}: {} counts, {:?}/op",
+            time_elapsed,
+            count_milestone,
+            time_elapsed / count_milestone.try_into().unwrap()
+        );
+        count_milestone = (count_milestone as f64 * freq_mul).ceil() as usize;
+      }
     }
-    Ok(time_measures)
+    Ok((time_measures, query_counts))
   }
 
   fn reload(&self) -> GResult<SOSDRankDB> {
@@ -221,7 +232,7 @@ impl Experiment {
   }
 }
 
-fn main() -> GResult<()> {
+fn main_guarded() -> GResult<()> {
   // execution init
   env_logger::init();
 
@@ -233,24 +244,32 @@ fn main() -> GResult<()> {
   let mut exp = Experiment::from(&args)?;
 
   // build index
-  // TODO: control optional by flag
-  exp.build(&args)?;
-  println!("Built index");
+  if args.do_build {
+    exp.build(&args)?;
+    println!("Built index"); 
+  }
 
   // run benchmark
-  let time_measures = exp.benchmark()?;
-  println!("Collected {} measurements", time_measures.len());
+  let (time_measures, query_counts) = if args.do_benchmark {
+    let (time_measures, query_counts) = exp.benchmark(&args)?;
+    println!("Collected {} measurements", time_measures.len()); 
+    assert_eq!(time_measures.len(), query_counts.len());
+    (time_measures, query_counts)
+  } else {
+    (Vec::new(), Vec::new())
+  };
 
   // write results to log
-  log_result(&args, &time_measures)?;
+  log_result(&args, &time_measures, &query_counts)?;
   Ok(())
 }
 
-fn log_result(args: &Cli, time_measures: &[u128]) -> GResult<()> {
+fn log_result(args: &Cli, time_measures: &[u128], query_counts: &[usize]) -> GResult<()> {
   // compose json result
   let result_json = serde_json::to_string(&BenchmarkResult {
     setting: args,
     time_measures,
+    query_counts,
   })?;
 
   // write appending 
@@ -266,3 +285,6 @@ fn log_result(args: &Cli, time_measures: &[u128]) -> GResult<()> {
   Ok(())
 }
 
+fn main() {
+  main_guarded().expect("Error occur during sosd experiment");
+}

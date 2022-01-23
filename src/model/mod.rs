@@ -5,7 +5,6 @@ use std::time::Duration;
 use crate::common::error::GResult;
 use crate::io::profile::StorageProfile;
 use crate::meta::Context;
-use crate::store::complexity::StepComplexity;
 use crate::store::key_buffer::KeyBuffer;
 use crate::store::key_position::KeyInterval;
 use crate::store::key_position::KeyPositionCollection;
@@ -50,7 +49,6 @@ impl ModelReconMeta {
 }
 
 
-
 /* Model (Incremental) Builders */
 
 pub struct BuilderFinalReport {
@@ -59,7 +57,7 @@ pub struct BuilderFinalReport {
   pub model_loads: Vec<usize>,  // search load(s) in bytes assuming having the whole model
 }
 
-pub trait ModelBuilder {
+pub trait ModelBuilder: Sync {
   fn consume(&mut self, kpr: &KeyPositionRange) -> GResult<MaybeKeyBuffer>;
   fn finalize(self: Box<Self>) -> GResult<BuilderFinalReport>;
 }
@@ -68,6 +66,7 @@ pub trait ModelBuilder {
 /* Model Drafter */
 // prefer this if the resulting model is not large
 
+#[derive(Debug)]
 pub struct ModelDraft {
   pub key_buffers: Vec<KeyBuffer>,
   pub serde: Box<dyn ModelRecon>,
@@ -75,103 +74,13 @@ pub struct ModelDraft {
   pub cost: Duration,
 }
 
-pub trait ModelDrafter {
+unsafe impl Send for ModelDraft {}
+
+pub trait ModelDrafter: Sync + Debug {
   fn draft(&self, kps: &KeyPositionCollection, profile: &dyn StorageProfile) -> GResult<ModelDraft>;
 }
 
 
-/* Accumulating mulitple drafters into one that tries and picks the best one */
 
-pub struct MultipleDrafter {
-  drafters: Vec<Box<dyn ModelDrafter>>,
-}
-
-impl MultipleDrafter {
-  pub fn from(drafters: Vec<Box<dyn ModelDrafter>>) -> MultipleDrafter {
-    MultipleDrafter{ drafters }
-  }
-
-  pub fn push(&mut self, drafter: Box<dyn ModelDrafter>) {
-    self.drafters.push(drafter)
-  }
-}
-
-impl ModelDrafter for MultipleDrafter {
-  fn draft(&self, kps: &KeyPositionCollection, profile: &dyn StorageProfile) -> GResult<ModelDraft> {
-    let mut best_draft: Option<ModelDraft> = None;
-    for drafter in &self.drafters {  // TODO: parallelize this?
-      let draft = drafter.draft(kps, profile)?;
-      best_draft = match best_draft {
-        Some(the_best_draft) => if the_best_draft.cost < draft.cost {
-          Some(the_best_draft)
-        } else {
-          Some(draft)
-        },
-        None => Some(draft),
-      };
-    }
-    let best_draft = best_draft.expect("No draft produced (possibly drafters list is empty?)");
-    log::info!(
-      "Best drafted model: {:?}, {} submodels, loads= {:?}, cost= {:?}",
-      best_draft.serde,
-      best_draft.key_buffers.len(),
-      best_draft.loads,
-      best_draft.cost,
-    );
-    Ok(best_draft)
-  }
-}
-
-
-/* Builder --> Drafter adaptor */
-
-pub type BuilerProducer = dyn Fn() -> Box<dyn ModelBuilder>;
-
-pub struct BuilderAsDrafter {
-  builder_producer: Box<BuilerProducer>,
-}
-
-impl BuilderAsDrafter {
-  fn wrap(builder_producer: Box<BuilerProducer>) -> BuilderAsDrafter {
-    BuilderAsDrafter { builder_producer }
-  }
-}
-
-impl ModelDrafter for BuilderAsDrafter {
-  fn draft(&self, kps: &KeyPositionCollection, profile: &dyn StorageProfile) -> GResult<ModelDraft> {
-    let mut model_builder = (*self.builder_producer)();
-    let mut total_size = 0;
-    let mut key_buffers = Vec::new();
-    for kpr in kps.range_iter() {
-      if let Some(model_kb) = model_builder.consume(&kpr)? {
-        total_size += model_kb.buffer.len();
-        key_buffers.push(model_kb);
-      }
-    }
-
-    // finalize last bits of model
-    let BuilderFinalReport { maybe_model_kb, serde, model_loads } = model_builder.finalize()?;
-    if let Some(model_kb) = maybe_model_kb {
-        total_size += model_kb.buffer.len();
-        key_buffers.push(model_kb);
-    }
-
-    // estimate cost
-    let (est_complexity_loads, _) = StepComplexity::measure(profile, total_size);
-    let complexity_cost = profile.sequential_cost(&est_complexity_loads);
-    let model_cost = profile.sequential_cost(&model_loads);
-    let total_loads = [est_complexity_loads, model_loads].concat();
-    let cost = profile.sequential_cost(&total_loads);
-    log::info!(
-      "Drafted model: {} submodels, loads= {:?}, cost= {:?} (c/m: {:?}/{:?})",
-      key_buffers.len(),
-      total_loads,
-      cost,
-      complexity_cost,
-      model_cost,
-    );
-    Ok(ModelDraft{ key_buffers, serde, loads: total_loads, cost })
-  }
-}
-
+pub mod toolkit;
 pub mod linear;

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-pub trait StorageProfile {
+pub trait StorageProfile: Sync {
   // estimate cost for a read of size (read_size in bytes), output in nanoseconds
   fn cost(&self, read_size: usize) -> Duration;
 

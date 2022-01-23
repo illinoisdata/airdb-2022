@@ -6,7 +6,6 @@ use std::io;
 
 use crate::common::error::GResult;
 use crate::meta::Context;
-use crate::model::BuilderAsDrafter;
 use crate::model::BuilderFinalReport;
 use crate::model::MaybeKeyBuffer;
 use crate::model::Model;
@@ -15,7 +14,8 @@ use crate::model::ModelDrafter;
 use crate::model::ModelRecon;
 use crate::model::ModelReconMeta;
 use crate::model::ModelReconMetaserde;
-use crate::model::MultipleDrafter;
+use crate::model::toolkit::BuilderAsDrafter;
+use crate::model::toolkit::MultipleDrafter;
 use crate::store::key_buffer::KeyBuffer;
 use crate::store::key_position::KEY_LENGTH;
 use crate::store::key_position::KeyInterval;

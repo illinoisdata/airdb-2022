@@ -1,6 +1,14 @@
 use byteorder::ByteOrder;
 use byteorder::LittleEndian;
+use rand::Rng;
+use rand::SeedableRng;
+use rand_pcg::Pcg64;
 use serde::{Serialize, Deserialize};
+use sscanf::scanf;
+use std::fs::OpenOptions;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Write;
 
 use crate::common::error::GResult;
 use crate::index::Index;
@@ -106,4 +114,31 @@ impl SOSDRankDB {  // for Metaserde
       },
     })
   }
+}
+
+pub fn generate_keyset(kps: &KeyPositionCollection, keyset_path: String, num_keyset: usize) -> GResult<()> {
+  let mut keyset_file = OpenOptions::new()
+    .create(true)
+    .write(true)
+    .truncate(true)
+    .open(keyset_path.as_str())?;
+  let mut rng = Pcg64::seed_from_u64(54613789);  // "random" seed via cat typing asdasd
+
+  for _ in 0..num_keyset {
+    let rank = rng.gen_range(0..kps.len());
+    let kp = &kps[rank];  // assume key-position is sorted by key
+    writeln!(&mut keyset_file, "{} {}", kp.key, rank)?;
+  }
+  Ok(())
+}
+
+pub fn read_keyset(keyset_path: String) -> GResult<Vec<KeyRank>> {
+  let keyset_file = OpenOptions::new()
+    .read(true)
+    .open(keyset_path.as_str())?;
+  let reader = BufReader::new(keyset_file);
+  Ok(reader.lines().map(|line| {
+    let (key, rank) = scanf!(line.unwrap(), "{} {}", KeyT, usize).unwrap();
+    KeyRank { key, rank }
+  }).collect())
 }

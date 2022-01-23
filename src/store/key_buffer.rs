@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::store::key_position::KEY_LENGTH;
 use crate::store::key_position::KeyT;
 
@@ -5,10 +7,18 @@ use crate::store::key_position::KeyT;
 /* key-value struct */
 
 // const KEY_LENGTH: usize = std::mem::size_of::<KeyT>();
-#[derive(Debug)]
 pub struct KeyBuffer {
   pub key: KeyT,  // TODO: generic Num + PartialOrd type
   pub buffer: Vec<u8>,  // TODO: copy-on-write?
+}
+
+impl fmt::Debug for KeyBuffer {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_struct("KeyBuffer")
+      .field("key", &self.key)
+      .field("buffer_bytes", &self.buffer.len())
+      .finish()
+  }
 }
 
 impl KeyBuffer {  // maybe implement in Serializer, Deserializer instead?

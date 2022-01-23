@@ -13,6 +13,8 @@ Learned index on external memory model for key-value data
   - [x] Reader: read partial in range
 - [x] Fix-length array store
 - [x] Add dataset: fixed-sized elements (e.g. SOSD)
+  - [x] Improve keysets with answers
+  - [x] Read and query from keysets
 - [ ] Step function
   - [ ] Model builder
   - [ ] Layer builder
@@ -20,7 +22,7 @@ Learned index on external memory model for key-value data
   - [x] Model builder
   - [x] Layer builder
 - [x] Stack and balance index builder
-- [ ] Parallel builder connector
+- [x] Parallel builder connector
 - [ ] Partition builder connector
 - [x] Meta-serializable structs
 - [x] Rank DB
