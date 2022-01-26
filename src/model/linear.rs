@@ -26,6 +26,21 @@ use crate::store::key_position::POSITION_LENGTH;
 use crate::store::key_position::PositionT;
 
 
+
+/*
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+WARNING:
+
+this model building has a bug where the line cuts through the key-position box
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+*/
+
 /* The Model */
 
 #[derive(Debug)]
@@ -59,8 +74,8 @@ impl Model for DoubleLinearModel {
 
   fn predict(&self, key: &KeyT) -> KeyPositionRange {
     // PANIC: this would overflow if key is outside of the coverage...
-    let left_offset = self.lower_line.evaluate(key);
-    let right_offset = self.upper_line.evaluate(key);
+    let left_offset = self.lower_line.evaluate(key).saturating_sub(128);  // HACK: the box is always less than 8 byte high...
+    let right_offset = self.upper_line.evaluate(key) + 128;  // HACK: the box is always less than 8 byte high...
     KeyPositionRange::from_bound(*key, left_offset, right_offset)
   }
 }
@@ -152,6 +167,7 @@ fn sort_anchor<'a>(anc_1: &'a KeyPosition, anc_2: &'a KeyPosition, pov: &'a KeyP
   }
 }
 
+#[derive(Debug)]
 struct Corridor {
   key: KeyT,
   lower_kp: KeyPosition,

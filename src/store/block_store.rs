@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
+use std::cell::RefCell;
 use std::fmt;
-use std::io;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -75,7 +75,7 @@ impl BlockStoreConfig {
     self
   }
 
-  pub fn build(self, storage: &Rc<ExternalStorage>) -> BlockStore {
+  pub fn build(self, storage: &Rc<RefCell<ExternalStorage>>) -> BlockStore {
     BlockStore::new(storage, self)
   }
 }
@@ -87,7 +87,7 @@ pub struct BlockStoreState {
 }
 
 pub struct BlockStore {
-  storage: Rc<ExternalStorage>,
+  storage: Rc<RefCell<ExternalStorage>>,
   state: BlockStoreState,
 }
 
@@ -98,7 +98,7 @@ impl fmt::Debug for BlockStore {
 }
 
 impl BlockStore {
-  fn new(storage: &Rc<ExternalStorage>, cfg: BlockStoreConfig) -> BlockStore {
+  fn new(storage: &Rc<RefCell<ExternalStorage>>, cfg: BlockStoreConfig) -> BlockStore {
     BlockStore{
       storage: Rc::clone(storage),
       state: BlockStoreState {
@@ -129,12 +129,12 @@ impl BlockStore {
     self.state.cfg.prefix.join(block_name)
   }
 
-  fn write_block(&self, block_idx: usize, block_buffer: &[u8]) -> io::Result<()> {
+  fn write_block(&self, block_idx: usize, block_buffer: &[u8]) -> GResult<()> {
       let block_path = self.block_path(block_idx);
-      self.storage.write_all(&block_path, block_buffer)
+      self.storage.borrow_mut().write_all(&block_path, block_buffer)
   }
 
-  fn read_page_range(&self, offset: PositionT, length: PositionT) -> io::Result<(Vec<FlagT>, Vec<u8>)> {
+  fn read_page_range(&self, offset: PositionT, length: PositionT) -> GResult<(Vec<FlagT>, Vec<u8>)> {
     // calculate first and last page indexes
     let end_offset = offset + length;
     let start_page_idx = offset / self.state.cfg.page_size + (offset % self.state.cfg.page_size != 0) as usize;
@@ -142,7 +142,7 @@ impl BlockStore {
 
     // make read requests
     let requests = self.read_page_range_requests(start_page_idx, end_page_idx);
-    let section_buffers = self.storage.read_batch_sequential(&requests)?;
+    let section_buffers = self.storage.borrow_mut().read_batch_sequential(&requests)?;
     let mut flags = Vec::new();
     let mut chunks_buffer = Vec::new();
     for section_buffer in section_buffers {
@@ -192,7 +192,7 @@ impl DataStore for BlockStore {
     // this would disallow readers while the writer's lifetime as well
 
     // prepare the prefix directory
-    self.storage.create(&self.state.cfg.prefix)?;
+    self.storage.borrow_mut().create(&self.state.cfg.prefix)?;
 
     // make the writer
     self.state.total_pages = 0;  // TODO: append write?
@@ -260,7 +260,7 @@ impl<'a> BlockStoreWriter<'a> {
     }
   }
 
-  fn write_dbuffer(&mut self, dbuffer: &[u8]) -> io::Result<PositionT> {
+  fn write_dbuffer(&mut self, dbuffer: &[u8]) -> GResult<PositionT> {
     let key_offset = self.page_idx * self.owner_store.state.cfg.page_size;
     let mut flag = FlagT::try_from(dbuffer.len()).ok().unwrap();
     for kv_chunk in dbuffer.chunks(self.chunk_size) {
@@ -274,7 +274,7 @@ impl<'a> BlockStoreWriter<'a> {
     Ok(key_offset)
   }
 
-  fn page_to_write(&mut self) -> io::Result<&mut [u8]> {
+  fn page_to_write(&mut self) -> GResult<&mut [u8]> {
     let page_size = self.owner_store.state.cfg.page_size;
 
     // get the buffer
@@ -296,7 +296,7 @@ impl<'a> BlockStoreWriter<'a> {
     // return the next page slice
   }
 
-  fn flush_current_block(&mut self) -> io::Result<()> {
+  fn flush_current_block(&mut self) -> GResult<()> {
     // write up to written page
     let written_buffer = if self.page_idx < (self.block_idx + 1) * self.pages_per_block {
       let written_length = (self.page_idx % self.pages_per_block) * self.owner_store.state.cfg.page_size;
@@ -313,13 +313,13 @@ impl<'a> BlockStoreWriter<'a> {
 }
 
 impl<'a> DataStoreWriter for BlockStoreWriter<'a> {
-  fn write(&mut self, kb: &KeyBuffer) -> io::Result<()> {
+  fn write(&mut self, kb: &KeyBuffer) -> GResult<()> {
     let key_offset = self.write_dbuffer(&kb.buffer)?;
     self.key_positions.push(kb.key, key_offset);
     Ok(())
   }
 
-  fn commit(mut self: Box<Self>) -> io::Result<KeyPositionCollection> {
+  fn commit(mut self: Box<Self>) -> GResult<KeyPositionCollection> {
     self.flush_current_block()?;
     self.owner_store.end_write(self.page_idx);
     self.key_positions.set_position_range(0, self.page_idx * self.owner_store.state.cfg.page_size);
@@ -397,7 +397,7 @@ impl<'a> Iterator for BlockStoreReaderIter<'a> {
 mod tests {
   use super::*;
   use tempfile::TempDir;
-  use crate::io::storage::FileSystemAdaptor;
+  use crate::io::storage::MmapAdaptor;
   use crate::store::key_position::KeyT;
 
   fn generate_simple_kv() -> ([KeyT; 14], [Box<[u8]>; 14]) {
@@ -442,8 +442,8 @@ mod tests {
 
     // setup a block store
     let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
-    let es = Rc::new(ExternalStorage::new(Box::new(fsa)));
+    let mfsa = MmapAdaptor::new(&temp_dir);
+    let es = Rc::new(RefCell::new(ExternalStorage::new(Box::new(mfsa))));
     let mut bstore = BlockStore::builder("test_bstore")
       .block_size(128)  // tune down for unit testing
       .build(&es);

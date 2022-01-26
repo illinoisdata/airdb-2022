@@ -1,11 +1,16 @@
+use memmap2::Mmap;
+use memmap2::MmapOptions;
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::Read;
 use std::io::Write;
-use std::fs::OpenOptions;
 use std::os::unix::fs::FileExt;
-
-use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+
+use crate::common::error::GResult;
 
 /* Data structs */
 
@@ -28,16 +33,21 @@ pub enum ReadRequest {
 
 pub trait Adaptor {
   // read whole blob specified in path
-  fn read_all(&self, path: &Path) -> io::Result<Vec<u8>>;
+  fn read_all(&mut self, path: &Path) -> GResult<Vec<u8>>;
   // read range starting at offset for length bytes
-  fn read_range(&self, path: &Path, range: &Range) -> io::Result<Vec<u8>>;
+  fn read_range(&mut self, path: &Path, range: &Range) -> GResult<Vec<u8>>;
   // generic read for supported request type
-  fn read(&self, request: &ReadRequest) -> io::Result<Vec<u8>>;
+  fn read(&mut self, request: &ReadRequest) -> GResult<Vec<u8>> {
+    match request {
+      ReadRequest::All { path } => self.read_all(path),
+      ReadRequest::Range { path, range } => self.read_range(path, range),
+    }
+  }
 
   // prepare to write inside this path
-  fn create(&self, path: &Path) -> io::Result<()>;
+  fn create(&mut self, path: &Path) -> GResult<()>;
   // write whole byte array to blob
-  fn write_all(&self, path: &Path, buf: &[u8]) -> io::Result<()>;
+  fn write_all(&mut self, path: &Path, buf: &[u8]) -> GResult<()>;
 }
 
 pub struct FileSystemAdaptor {
@@ -51,7 +61,7 @@ impl FileSystemAdaptor {
 }
 
 impl Adaptor for FileSystemAdaptor {
-  fn read_all(&self, path: &Path) -> io::Result<Vec<u8>> {
+  fn read_all(&mut self, path: &Path) -> GResult<Vec<u8>> {
     let mut f = OpenOptions::new()
         .read(true)
         .open(self.root_path.join(path))?;
@@ -60,7 +70,7 @@ impl Adaptor for FileSystemAdaptor {
     Ok(buf)
   }
 
-  fn read_range(&self, path: &Path, range: &Range) -> io::Result<Vec<u8>> {
+  fn read_range(&mut self, path: &Path, range: &Range) -> GResult<Vec<u8>> {
     let f = OpenOptions::new()
         .read(true)
         .open(self.root_path.join(path))?;
@@ -76,28 +86,99 @@ impl Adaptor for FileSystemAdaptor {
     Ok(buf)
   }
 
-  fn read(&self, request: &ReadRequest) -> io::Result<Vec<u8>> {
-    match request {
-      ReadRequest::All { path } => self.read_all(path),
-      ReadRequest::Range { path, range } => self.read_range(path, range),
-    }
+  fn create(&mut self, path: &Path) -> GResult<()> {
+    Ok(std::fs::create_dir_all(self.root_path.join(path))?)
   }
 
-  fn create(&self, path: &Path) -> io::Result<()> {
-    std::fs::create_dir_all(self.root_path.join(path))
-  }
-
-  fn write_all(&self, path: &Path, buf: &[u8]) -> io::Result<()> {
+  fn write_all(&mut self, path: &Path, buf: &[u8]) -> GResult<()> {
     let mut f = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .open(self.root_path.join(path))?;
-    f.write_all(buf.as_ref())
+    Ok(f.write_all(buf.as_ref())?)
   }
 }
 
-/* TODO: Buffer Pool */
+/* File system adaptor with mmap as cache/buffer pool layer */
+
+pub struct MmapAdaptor {
+  root_path: PathBuf,
+  mmap_dict: HashMap<PathBuf, Mmap>,
+  fs_adaptor: FileSystemAdaptor,
+}
+
+fn new_mmap(path_buf: &Path) -> GResult<Mmap> {
+  log::debug!("Mmaping {:?}", path_buf);
+  let file = File::open(path_buf)?;
+  Ok(unsafe { MmapOptions::new().populate().map(&file)? })
+}
+
+impl MmapAdaptor {
+  pub fn new<P: AsRef<Path>>(root_path: &P) -> MmapAdaptor {
+    MmapAdaptor {
+      root_path: root_path.as_ref().to_path_buf(),
+      mmap_dict: HashMap::new(),
+      fs_adaptor: FileSystemAdaptor::new(root_path),
+    }
+  }
+
+  fn map<'a>(&'a mut self, path: &Path) -> GResult<&'a Mmap> {
+    // this is or_insert_with_key with fallible insertion
+    let path_buf = self.convert_path(path);
+    Ok(match self.mmap_dict.entry(path_buf.clone()) {
+      Entry::Occupied(entry) => entry.into_mut(),
+      Entry::Vacant(entry) => entry.insert(new_mmap(&path_buf)?),
+    })
+  }
+
+  fn try_map(&mut self, path: &Path) -> Option<&Mmap> {
+    match self.map(path) {
+      Ok(mmap) => Some(mmap),  // TODO: avoid copy?
+      Err(e) => {
+        log::warn!("MmapAdaptor failed to mmap path {:?} with {}", path, e);
+        None
+      }
+    }
+  }
+
+  fn unmap(&mut self, path: &Path) -> GResult<()> {
+    self.mmap_dict.remove(&self.convert_path(path));
+    Ok(())
+  }
+
+  fn convert_path(&self, path: &Path) -> PathBuf {
+    self.root_path.join(path)
+  }
+}
+
+impl Adaptor for MmapAdaptor {
+  fn read_all(&mut self, path: &Path) -> GResult<Vec<u8>> {
+    match self.try_map(path) {
+      Some(mmap) => Ok(mmap.to_vec()),  // TODO: avoid copy?
+      None => self.fs_adaptor.read_all(path),
+    }
+  }
+
+  fn read_range(&mut self, path: &Path, range: &Range) -> GResult<Vec<u8>> {
+    match self.try_map(path) {
+      Some(mmap) => Ok(mmap[range.offset..range.offset+range.length].to_vec()),  // TODO: avoid copy?
+      None => self.fs_adaptor.read_range(path, range),
+    }
+  }
+
+  fn create(&mut self, path: &Path) -> GResult<()> {
+    self.unmap(path)?;
+    self.fs_adaptor.create(path)
+  }
+
+  fn write_all(&mut self, path: &Path, buf: &[u8]) -> GResult<()> {
+    self.unmap(path)?;
+    self.fs_adaptor.write_all(path, buf)
+  }
+}
+
+/* Common io interface */
 
 pub struct ExternalStorage {
   adaptor: Box<dyn Adaptor>,
@@ -108,35 +189,35 @@ impl ExternalStorage {
     ExternalStorage{ adaptor }
   }
 
-  pub fn read_batch_sequential(&self, requests: &[ReadRequest]) -> io::Result<Vec<Vec<u8>>> {
+  pub fn read_batch_sequential(&mut self, requests: &[ReadRequest]) -> GResult<Vec<Vec<u8>>> {
     requests.iter().map(|request| self.adaptor.read(request)).collect()
   }
   // // TODO: how to return iterator?
   // // Map<std::slice::Iter<'_, ReadRequest<'_>>, 
-  // fn read_batch_early(&self, requests: Vec<ReadRequest>) -> Box<dyn Iterator<Item=io::Result<Vec<u8>>>> {
+  // fn read_batch_early(&self, requests: Vec<ReadRequest>) -> Box<dyn Iterator<Item=GResult<Vec<u8>>>> {
   //   Box::new(requests.into_iter().map(|request| self.adaptor.read(&request)))
   //   // panic!("not implemented")
   // }
 }
 
 impl Adaptor for ExternalStorage {
-  fn read_all(&self, path: &Path) -> io::Result<Vec<u8>> {
+  fn read_all(&mut self, path: &Path) -> GResult<Vec<u8>> {
     self.adaptor.read_all(path)
   }
 
-  fn read_range(&self, path: &Path, range: &Range) -> io::Result<Vec<u8>> {
+  fn read_range(&mut self, path: &Path, range: &Range) -> GResult<Vec<u8>> {
     self.adaptor.read_range(path, range)
   }
 
-  fn read(&self, request: &ReadRequest) -> io::Result<Vec<u8>> {
+  fn read(&mut self, request: &ReadRequest) -> GResult<Vec<u8>> {
     self.adaptor.read(request)
   }
 
-  fn create(&self, path: &Path) -> io::Result<()> {
+  fn create(&mut self, path: &Path) -> GResult<()> {
     self.adaptor.create(path)
   }
 
-  fn write_all(&self, path: &Path, buf: &[u8]) -> io::Result<()> {
+  fn write_all(&mut self, path: &Path, buf: &[u8]) -> GResult<()> {
     self.adaptor.write_all(path, buf)
   }
 }
@@ -148,17 +229,18 @@ mod tests {
   use rand::Rng;
   use rand;
   use tempfile::TempDir;
+  use test_log::test;
 
   /* generic Adaptor unit tests */
 
-  fn write_all_zero_ok(adaptor: impl Adaptor) -> io::Result<()> {
+  fn write_all_zero_ok(mut adaptor: impl Adaptor) -> GResult<()> {
     let test_path = PathBuf::from("test.bin");
     let test_data = [0u8; 256];
     adaptor.write_all(&test_path, &test_data)?;
     Ok(())
   }
 
-  fn write_all_inside_dir_ok(adaptor: impl Adaptor) -> io::Result<()> {
+  fn write_all_inside_dir_ok(mut adaptor: impl Adaptor) -> GResult<()> {
     let test_path = PathBuf::from("test_dir/test.bin");
     let test_data = [0u8; 256];
     adaptor.create(Path::new("test_dir"))?;
@@ -166,7 +248,7 @@ mod tests {
     Ok(())
   }
 
-  fn write_read_all_zero_ok(adaptor: impl Adaptor) -> io::Result<()> {
+  fn write_read_all_zero_ok(mut adaptor: impl Adaptor) -> GResult<()> {
     // write some data
     let test_path = PathBuf::from("test.bin");
     let test_data = [0u8; 256];
@@ -178,7 +260,7 @@ mod tests {
     Ok(())
   }
 
-  fn write_read_all_random_ok(adaptor: impl Adaptor) -> io::Result<()> {
+  fn write_read_all_random_ok(mut adaptor: impl Adaptor) -> GResult<()> {
     // write some data
     let test_path = PathBuf::from("test.bin");
     let mut test_data = [0u8; 256];
@@ -191,7 +273,7 @@ mod tests {
     Ok(())
   }
 
-  fn write_twice_read_all_random_ok(adaptor: impl Adaptor) -> io::Result<()> {
+  fn write_twice_read_all_random_ok(mut adaptor: impl Adaptor) -> GResult<()> {
     // write some data
     let test_path = PathBuf::from("test.bin");
     let test_data_old = [1u8; 256];
@@ -211,7 +293,7 @@ mod tests {
     Ok(())
   }
 
-  fn write_read_range_random_ok(adaptor: impl Adaptor) -> io::Result<()> {
+  fn write_read_range_random_ok(mut adaptor: impl Adaptor) -> GResult<()> {
     // write some data
     let test_path = PathBuf::from("test.bin");
     let mut test_data = [0u8; 256];
@@ -230,7 +312,7 @@ mod tests {
     Ok(())
   }
 
-  fn write_read_generic_random_ok(adaptor: impl Adaptor) -> io::Result<()> {
+  fn write_read_generic_random_ok(mut adaptor: impl Adaptor) -> GResult<()> {
     // write some data
     let test_path = PathBuf::from("test.bin");
     let mut test_data = [0u8; 256];
@@ -258,67 +340,132 @@ mod tests {
 
   /* FileSystemAdaptor-specific tests */
 
-  fn fsa_resources_setup() -> io::Result<FileSystemAdaptor> {
+  fn fsa_resources_setup() -> GResult<FileSystemAdaptor> {
     let mut resource_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     resource_dir.push("resources/test");
     Ok(FileSystemAdaptor::new(&resource_dir))
   }
-    
-  // }
+
+  fn fsa_tempdir_setup() -> GResult<(TempDir, FileSystemAdaptor)> {
+    let temp_dir = TempDir::new()?;
+    let mfsa = FileSystemAdaptor::new(&temp_dir);
+    Ok((temp_dir, mfsa))
+  }
 
   #[test]
-  fn fsa_write_all_zero_ok() -> io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
+  fn fsa_write_all_zero_ok() -> GResult<()> {
+    let (_temp_dir, fsa) = fsa_tempdir_setup()?;
     write_all_zero_ok(fsa)
   }
 
   #[test]
-  fn fsa_write_all_inside_dir_ok() -> io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
+  fn fsa_write_all_inside_dir_ok() -> GResult<()> {
+    let (_temp_dir, fsa) = fsa_tempdir_setup()?;
     write_all_inside_dir_ok(fsa)
   }
 
   #[test]
-  fn fsa_write_read_all_zero_ok() -> io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
+  fn fsa_write_read_all_zero_ok() -> GResult<()> {
+    let (_temp_dir, fsa) = fsa_tempdir_setup()?;
     write_read_all_zero_ok(fsa)
   }
 
   #[test]
-  fn fsa_write_read_all_random_ok() -> io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
+  fn fsa_write_read_all_random_ok() -> GResult<()> {
+    let (_temp_dir, fsa) = fsa_tempdir_setup()?;
     write_read_all_random_ok(fsa)
   }
 
   #[test]
-  fn fsa_write_twice_read_all_random_ok() -> io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
+  fn fsa_write_twice_read_all_random_ok() -> GResult<()> {
+    let (_temp_dir, fsa) = fsa_tempdir_setup()?;
     write_twice_read_all_random_ok(fsa)
   }
 
   #[test]
-  fn fsa_write_read_range_random_ok() -> io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
+  fn fsa_write_read_range_random_ok() -> GResult<()> {
+    let (_temp_dir, fsa) = fsa_tempdir_setup()?;
     write_read_range_random_ok(fsa)
   }
 
   #[test]
-  fn fsa_write_read_generic_random_ok() -> io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
+  fn fsa_write_read_generic_random_ok() -> GResult<()> {
+    let (_temp_dir, fsa) = fsa_tempdir_setup()?;
     write_read_generic_random_ok(fsa)
   }
 
   #[test]
-  fn fsa_read_all_ok() -> io::Result<()> {
-    let fsa = fsa_resources_setup()?;
+  fn fsa_read_all_ok() -> GResult<()> {
+    let mut fsa = fsa_resources_setup()?;
     let buf = fsa.read_all(Path::new("small.txt"))?;
+    let read_string = match std::str::from_utf8(&buf) {
+      Ok(v) => v,
+      Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
+    };
+    assert_eq!("text for testing", read_string, "Retrieved string mismatched");
+    Ok(())
+  }
+
+  /* MmapAdaptor-specific tests */
+
+  fn mfsa_resources_setup() -> GResult<MmapAdaptor> {
+    let mut resource_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    resource_dir.push("resources/test");
+    Ok(MmapAdaptor::new(&resource_dir))
+  }
+
+  fn mfsa_tempdir_setup() -> GResult<(TempDir, MmapAdaptor)> {
+    let temp_dir = TempDir::new()?;
+    let mfsa = MmapAdaptor::new(&temp_dir);
+    Ok((temp_dir, mfsa))
+  }
+
+  #[test]
+  fn mfsa_write_all_zero_ok() -> GResult<()> {
+    let (_temp_dir, mfsa) = mfsa_tempdir_setup()?;
+    write_all_zero_ok(mfsa)
+  }
+
+  #[test]
+  fn mfsa_write_all_inside_dir_ok() -> GResult<()> {
+    let (_temp_dir, mfsa) = mfsa_tempdir_setup()?;
+    write_all_inside_dir_ok(mfsa)
+  }
+
+  #[test]
+  fn mfsa_write_read_all_zero_ok() -> GResult<()> {
+    let (_temp_dir, mfsa) = mfsa_tempdir_setup()?;
+    write_read_all_zero_ok(mfsa)
+  }
+
+  #[test]
+  fn mfsa_write_read_all_random_ok() -> GResult<()> {
+    let (_temp_dir, mfsa) = mfsa_tempdir_setup()?;
+    write_read_all_random_ok(mfsa)
+  }
+
+  #[test]
+  fn mfsa_write_twice_read_all_random_ok() -> GResult<()> {
+    let (_temp_dir, mfsa) = mfsa_tempdir_setup()?;
+    write_twice_read_all_random_ok(mfsa)
+  }
+
+  #[test]
+  fn mfsa_write_read_range_random_ok() -> GResult<()> {
+    let (_temp_dir, mfsa) = mfsa_tempdir_setup()?;
+    write_read_range_random_ok(mfsa)
+  }
+
+  #[test]
+  fn mfsa_write_read_generic_random_ok() -> GResult<()> {
+    let (_temp_dir, mfsa) = mfsa_tempdir_setup()?;
+    write_read_generic_random_ok(mfsa)
+  }
+
+  #[test]
+  fn mfsa_read_all_ok() -> GResult<()> {
+    let mut mfsa = mfsa_resources_setup()?;
+    let buf = mfsa.read_all(Path::new("small.txt"))?;
     let read_string = match std::str::from_utf8(&buf) {
       Ok(v) => v,
       Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
@@ -330,57 +477,51 @@ mod tests {
   /* ExternalStorage tests */
 
   #[test]
-  fn es_write_all_zero_ok() -> io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
+  fn es_write_all_zero_ok() -> GResult<()> {
+    let (_temp_dir, fsa) = fsa_tempdir_setup()?;
     let es = ExternalStorage::new(Box::new(fsa));
     write_all_zero_ok(es)
   }
 
   #[test]
-  fn es_write_read_all_zero_ok() -> io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
+  fn es_write_read_all_zero_ok() -> GResult<()> {
+    let (_temp_dir, fsa) = fsa_tempdir_setup()?;
     let es = ExternalStorage::new(Box::new(fsa));
     write_read_all_zero_ok(es)
   }
 
   #[test]
-  fn es_write_read_all_random_ok() -> io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
+  fn es_write_read_all_random_ok() -> GResult<()> {
+    let (_temp_dir, fsa) = fsa_tempdir_setup()?;
     let es = ExternalStorage::new(Box::new(fsa));
     write_read_all_random_ok(es)
   }
 
   #[test]
-  fn es_write_twice_read_all_random_ok() -> io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
+  fn es_write_twice_read_all_random_ok() -> GResult<()> {
+    let (_temp_dir, fsa) = fsa_tempdir_setup()?;
     let es = ExternalStorage::new(Box::new(fsa));
     write_twice_read_all_random_ok(es)
   }
 
   #[test]
-  fn es_write_read_range_random_ok() -> io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
+  fn es_write_read_range_random_ok() -> GResult<()> {
+    let (_temp_dir, fsa) = fsa_tempdir_setup()?;
     let es = ExternalStorage::new(Box::new(fsa));
     write_read_range_random_ok(es)
   }
 
   #[test]
-  fn es_write_read_generic_random_ok() -> io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
+  fn es_write_read_generic_random_ok() -> GResult<()> {
+    let (_temp_dir, fsa) = fsa_tempdir_setup()?;
     let es = ExternalStorage::new(Box::new(fsa));
     write_read_generic_random_ok(es)
   }
 
   #[test]
-  fn es_read_all_ok() -> io::Result<()> {
+  fn es_read_all_ok() -> GResult<()> {
     let fsa = fsa_resources_setup()?;
-    let es = ExternalStorage::new(Box::new(fsa));
+    let mut es = ExternalStorage::new(Box::new(fsa));
     let buf = es.read_all(Path::new("small.txt"))?;
     let read_string = match std::str::from_utf8(&buf) {
       Ok(v) => v,
@@ -391,10 +532,9 @@ mod tests {
   }
 
   #[test]
-  fn es_read_batch_sequential() -> io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
-    let es = ExternalStorage::new(Box::new(fsa));
+  fn es_read_batch_sequential() -> GResult<()> {
+    let (_temp_dir, fsa) = fsa_tempdir_setup()?;
+    let mut es = ExternalStorage::new(Box::new(fsa));
 
     // write some data
     let test_path = PathBuf::from("test.bin");

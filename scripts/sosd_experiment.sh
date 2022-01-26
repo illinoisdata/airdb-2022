@@ -18,6 +18,8 @@ KEYSET_ROOT=$2
 DB_ROOT=$3
 ACTION=$4
 RESET_SCRIPT=$5
+PROFILE="--affine-latency-ns 108000000 --affine-bandwidth-mbps 104.0"  # nfs
+# PROFILE="--affine-latency-ns 22000 --affine-bandwidth-mbps 2500.0"  # ssd
 echo "Using BLOB_ROOT=${BLOB_ROOT}, KEYSET_ROOT=${KEYSET_ROOT}, DB_ROOT=${DB_ROOT}, ACTION=${ACTION}, RESET_SCRIPT=${RESET_SCRIPT}"
 if [[ $ACTION != "build" && $ACTION != "benchmark" ]]
 then
@@ -56,7 +58,7 @@ build () {
   keyset_path="${KEYSET_ROOT}/${sosd_blob[0]}_${sosd_blob[1]}M_${sosd_blob[2]}_ks"
 
   set -x
-  RUST_LOG=info RUST_BACKTRACE=full target/release/sosd_experiment --root-path "./" --db-path "${DB_ROOT}/${blob_name}" --out-path sosd_build_out.jsons --dataset-name blob --sosd-blob-path "${BLOB_ROOT}/${blob_name}" --keyset-path "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} --affine-latency-ns 108000000 --affine-bandwidth-mbps 104.0 --do-build
+  RUST_LOG=info RUST_BACKTRACE=full target/release/sosd_experiment --root-path "./" --db-path "${DB_ROOT}/${blob_name}" --out-path sosd_build_out.jsons --dataset-name blob --sosd-blob-path "${BLOB_ROOT}/${blob_name}" --keyset-path "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} ${PROFILE} --do-build
   set +x
 }
 
@@ -70,7 +72,7 @@ benchmark () {
   for ((j = 0; j < 10; j++)) do
   bash ${RESET_SCRIPT}
   set -x
-  RUST_LOG=info RUST_BACKTRACE=full target/release/sosd_experiment --root-path "./" --db-path "${DB_ROOT}/${blob_name}" --out-path sosd_benchmark_out.jsons --dataset-name blob --sosd-blob-path "${BLOB_ROOT}/${blob_name}" --keyset-path "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} --affine-latency-ns 108000000 --affine-bandwidth-mbps 104.0 --do-benchmark
+  RUST_LOG=info RUST_BACKTRACE=full target/release/sosd_experiment --root-path "./" --db-path "${DB_ROOT}/${blob_name}" --out-path sosd_benchmark_out.jsons --dataset-name blob --sosd-blob-path "${BLOB_ROOT}/${blob_name}" --keyset-path "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} ${PROFILE} --do-benchmark
   set +x
   done
 }

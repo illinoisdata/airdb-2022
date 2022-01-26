@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
+use std::cell::RefCell;
 use std::fmt;
-use std::io;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -30,7 +30,7 @@ pub struct ArrayStoreState {
 
 
 pub struct ArrayStore {
-  storage: Rc<ExternalStorage>,
+  storage: Rc<RefCell<ExternalStorage>>,
   state: ArrayStoreState,
 }
 
@@ -41,7 +41,7 @@ impl fmt::Debug for ArrayStore {
 }
 
 impl ArrayStore {
-  pub fn new_sized(storage: &Rc<ExternalStorage>, array_path: PathBuf, data_size: usize) -> ArrayStore {
+  pub fn new_sized(storage: &Rc<RefCell<ExternalStorage>>, array_path: PathBuf, data_size: usize) -> ArrayStore {
     ArrayStore{
       storage: Rc::clone(storage),
       state: ArrayStoreState {
@@ -52,7 +52,7 @@ impl ArrayStore {
       },
     }
   }
-  pub fn from_exact(storage: &Rc<ExternalStorage>, array_path: PathBuf, data_size: usize, offset: usize, length: usize) -> ArrayStore {
+  pub fn from_exact(storage: &Rc<RefCell<ExternalStorage>>, array_path: PathBuf, data_size: usize, offset: usize, length: usize) -> ArrayStore {
     ArrayStore{
       storage: Rc::clone(storage),
       state: ArrayStoreState {
@@ -78,18 +78,18 @@ impl ArrayStore {
     self.state.length += written_elements;
   }
 
-  fn write_array(&self, array_buffer: &[u8]) -> io::Result<()> {
-      self.storage.write_all(&self.state.array_path, array_buffer)
+  fn write_array(&self, array_buffer: &[u8]) -> GResult<()> {
+      self.storage.borrow_mut().write_all(&self.state.array_path, array_buffer)
   }
 
-  fn read_page_range(&self, offset: PositionT, length: PositionT) -> io::Result<(Vec<u8>, usize)> {
+  fn read_page_range(&self, offset: PositionT, length: PositionT) -> GResult<(Vec<u8>, usize)> {
     // calculate first and last "page" indexes
     let end_offset = offset + length;
     let start_rank = offset / self.state.data_size + (offset % self.state.data_size != 0) as usize;
     let end_rank = end_offset / self.state.data_size;
 
     // make read requests
-    let array_buffer = self.storage.read_range(
+    let array_buffer = self.storage.borrow_mut().read_range(
       &self.state.array_path,
       &Range{
         offset: start_rank * self.state.data_size + self.state.offset,
@@ -106,7 +106,7 @@ impl DataStore for ArrayStore {
     // this would disallow readers while the writer's lifetime as well
 
     // prepare the prefix directory
-    self.storage.create(&PathBuf::from(""))?;
+    self.storage.borrow_mut().create(&PathBuf::from(""))?;
 
     // make the writer
     self.state.length = 0;  // TODO: append write?
@@ -164,27 +164,27 @@ impl<'a> ArrayStoreWriter<'a> {
     }
   }
 
-  fn write_dbuffer(&mut self, dbuffer: &[u8]) -> io::Result<PositionT> {
+  fn write_dbuffer(&mut self, dbuffer: &[u8]) -> GResult<PositionT> {
     assert_eq!(dbuffer.len(), self.owner_store.state.data_size);
     let cur_position = self.array_buffer.len();
     self.array_buffer.extend_from_slice(dbuffer);
     Ok(cur_position)
   }
 
-  fn flush_array_buffer(&mut self) -> io::Result<()> {
+  fn flush_array_buffer(&mut self) -> GResult<()> {
     // write to storage and step block forward
     self.owner_store.write_array(&self.array_buffer)
   }
 }
 
 impl<'a> DataStoreWriter for ArrayStoreWriter<'a> {
-  fn write(&mut self, kb: &KeyBuffer) -> io::Result<()> {
+  fn write(&mut self, kb: &KeyBuffer) -> GResult<()> {
     let key_offset = self.write_dbuffer(&kb.buffer)?;
     self.key_positions.push(kb.key, key_offset);
     Ok(())
   }
 
-  fn commit(mut self: Box<Self>) -> io::Result<KeyPositionCollection> {
+  fn commit(mut self: Box<Self>) -> GResult<KeyPositionCollection> {
     let length = self.key_positions.len();
     self.flush_array_buffer()?;
     self.owner_store.end_write(length);
@@ -272,7 +272,7 @@ impl<'a> Iterator for ArrayStoreReaderIterWithRank<'a> {
 mod tests {
   use super::*;
   use tempfile::TempDir;
-  use crate::io::storage::FileSystemAdaptor;
+  use crate::io::storage::MmapAdaptor;
   use crate::store::key_position::KeyT;
 
   fn generate_simple_kv() -> ([KeyT; 10], [Vec<u8>; 10]) {
@@ -298,8 +298,8 @@ mod tests {
 
     // setup a block store
     let temp_dir = TempDir::new()?;
-    let fsa = FileSystemAdaptor::new(&temp_dir);
-    let es = Rc::new(ExternalStorage::new(Box::new(fsa)));
+    let mfsa = MmapAdaptor::new(&temp_dir);
+    let es = Rc::new(RefCell::new(ExternalStorage::new(Box::new(mfsa))));
     let mut arrstore = ArrayStore::new_sized(&es, PathBuf::from("test_arrstore"), 4);
 
     // write but never commit

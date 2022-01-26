@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use structopt::StructOpt;
@@ -7,7 +8,7 @@ use airindex::common::error::GResult;
 use airindex::db::key_rank::generate_keyset;
 use airindex::db::key_rank::SOSDRankDB;
 use airindex::io::storage::ExternalStorage;
-use airindex::io::storage::FileSystemAdaptor;
+use airindex::io::storage::MmapAdaptor;
 use airindex::store::array_store::ArrayStore;
 use airindex::store::key_position::KeyPositionCollection;
 
@@ -56,8 +57,8 @@ fn main() -> GResult<()> {
 
 fn load_sosd(args: &Cli) -> GResult<SOSDRankDB> {
   // prepare storage interface
-  let fsa = Box::new(FileSystemAdaptor::new(&"./".to_owned()));
-  let es = Rc::new(ExternalStorage::new(fsa));
+  let mfsa = Box::new(MmapAdaptor::new(&"./".to_owned()));
+  let es = Rc::new(RefCell::new(ExternalStorage::new(mfsa)));
 
   let array_store = ArrayStore::from_exact(
     &es,

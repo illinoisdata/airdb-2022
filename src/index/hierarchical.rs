@@ -1,4 +1,5 @@
 use serde::{Serialize, Deserialize};
+use std::cell::RefCell;
 use std::error::Error;
 use std::rc::Rc;
 
@@ -37,14 +38,14 @@ impl Index for StackIndex {
 }
 
 pub struct BalanceStackIndexBuilder<'a> {
-  storage: Rc<ExternalStorage>,
+  storage: Rc<RefCell<ExternalStorage>>,
   drafter: Box<dyn ModelDrafter>,
   profile: &'a dyn StorageProfile,
   prefix_name: String,
 }
 
 impl<'a> BalanceStackIndexBuilder<'a> {
-  pub fn new(storage: &Rc<ExternalStorage>, drafter: Box<dyn ModelDrafter>, profile: &'a dyn StorageProfile, prefix_name: String) -> BalanceStackIndexBuilder<'a> {
+  pub fn new(storage: &Rc<RefCell<ExternalStorage>>, drafter: Box<dyn ModelDrafter>, profile: &'a dyn StorageProfile, prefix_name: String) -> BalanceStackIndexBuilder<'a> {
     BalanceStackIndexBuilder {
       storage: Rc::clone(storage),
       drafter,

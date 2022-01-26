@@ -1,15 +1,17 @@
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use serde::Serialize;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use std::fs::OpenOptions;
-use std::io;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 use structopt::StructOpt;
 use tempdir::TempDir;
 
+use airindex::common::error::GResult;
 use airindex::io::storage as astorage;
 use airindex::io::storage::Adaptor;
 
@@ -115,18 +117,18 @@ struct ExperimentConfig<'a> {
   read_method: ReadMethod,
 }
 
-fn benchmark(args: &Cli) -> io::Result<Vec<Vec<u128>>> {
+fn benchmark(args: &Cli) -> GResult<Vec<Vec<u128>>> {
   (0..args.num_trials).map(|i| {
     println!("trial {} / {}", i, args.num_trials);
     benchmark_set(args)
   }).collect()
 }
 
-fn benchmark_set(args: &Cli) -> io::Result<Vec<u128>> {
+fn benchmark_set(args: &Cli) -> GResult<Vec<u128>> {
   // create storage
   let temp_dir = TempDir::new_in(&args.root_path, "temp_dir")?;
-  let fsa = astorage::FileSystemAdaptor::new(&temp_dir);
-  let es = astorage::ExternalStorage::new(Box::new(fsa));
+  let mfsa = astorage::MmapAdaptor::new(&temp_dir);
+  let es = Rc::new(RefCell::new(astorage::ExternalStorage::new(Box::new(mfsa))));
 
   // writes
   let file_descs = benchmark_write(&es, args)?;
@@ -142,7 +144,7 @@ fn benchmark_set(args: &Cli) -> io::Result<Vec<u128>> {
   Ok(time_measures)
 }
 
-fn benchmark_write(es: &astorage::ExternalStorage, args: &Cli) -> io::Result<Vec<FileDescription>> {
+fn benchmark_write(es: &Rc<RefCell<astorage::ExternalStorage>>, args: &Cli) -> GResult<Vec<FileDescription>> {
   (0..args.num_files).map(|_i| {
     let file_spec = generate_one_writeset(args);
     write_file_spec(es, file_spec)
@@ -160,7 +162,7 @@ fn generate_one_writeset(args: &Cli) -> FileSpec {
   }
 }
 
-fn write_file_spec(es: &astorage::ExternalStorage, file_spec: FileSpec) -> io::Result<FileDescription> {
+fn write_file_spec(es: &Rc<RefCell<astorage::ExternalStorage>>, file_spec: FileSpec) -> GResult<FileDescription> {
   // randomize name
   let file_name: String = rand::thread_rng().sample_iter(&Alphanumeric)
     .take(7)
@@ -179,13 +181,13 @@ fn write_file_spec(es: &astorage::ExternalStorage, file_spec: FileSpec) -> io::R
   // rng.fill(&mut file_content);
 
   // write file
-  es.write_all(file_path.as_path(), &file_content)?;
+  es.borrow_mut().write_all(file_path.as_path(), &file_content)?;
 
   // return with description
   Ok(FileDescription{path: file_path, spec: file_spec})
 }
 
-fn benchmark_read(es: &astorage::ExternalStorage, args: &Cli, file_descs: &[FileDescription]) -> io::Result<Vec<u128>> {
+fn benchmark_read(es: &Rc<RefCell<astorage::ExternalStorage>>, args: &Cli, file_descs: &[FileDescription]) -> GResult<Vec<u128>> {
   // make experiment config
   let exp_config = generate_experiment_config(args, file_descs);
 
@@ -243,21 +245,21 @@ fn generate_one_readset(exp_config: &ExperimentConfig) -> Vec<astorage::ReadRequ
   }
 }
 
-fn read_measure(es: &astorage::ExternalStorage, read_request: &[astorage::ReadRequest], exp_config: &ExperimentConfig) -> io::Result<u128> {
+fn read_measure(es: &Rc<RefCell<astorage::ExternalStorage>>, read_request: &[astorage::ReadRequest], exp_config: &ExperimentConfig) -> GResult<u128> {
   let start_time = Instant::now();
   match exp_config.read_method {
-    ReadMethod::BatchSequential => es.read_batch_sequential(read_request)?,
+    ReadMethod::BatchSequential => es.borrow_mut().read_batch_sequential(read_request)?,
   };
   Ok(start_time.elapsed().as_nanos())
 }
 
-fn benchmark_cleanup(_file_descs: Vec<FileDescription>) -> io::Result<()> {
+fn benchmark_cleanup(_file_descs: Vec<FileDescription>) -> GResult<()> {
   // nothing to do...
   // tempdir will automatically remove files
   Ok(())
 }
 
-fn log_result(args: &Cli, time_measures: &[Vec<u128>]) -> io::Result<()> {
+fn log_result(args: &Cli, time_measures: &[Vec<u128>]) -> GResult<()> {
   // compose json result
   let result_json = serde_json::to_string(&ProfileResult {
     setting: args,

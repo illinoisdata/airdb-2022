@@ -73,10 +73,17 @@ impl SOSDRankDB {
     let mut kps = KeyPositionCollection::new();
     let reader = self.array_store.read_all()?;
     let mut current_offset = 0;
+    let mut last_key = 0;
     for dbuffer in reader.iter() {
       let current_key = self.deserialize_key(dbuffer);
-      kps.push(current_key, current_offset);  // TODO: overflow?
-      current_offset += self.array_store.data_size();
+      if last_key == current_key {
+        continue
+      } else {
+        assert!(last_key < current_key);
+        kps.push(current_key, current_offset);  // TODO: overflow?
+        current_offset += self.array_store.data_size();
+        last_key = current_key
+      }
     }
     kps.set_position_range(0, current_offset);
     Ok(kps)

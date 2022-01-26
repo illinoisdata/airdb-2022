@@ -41,8 +41,8 @@ impl KeyPosition {
       self.position
     } else {
       self.position + (
-        ((*key - self.key) as f64
-        / (other.key - self.key) as f64)
+        ((*key as f64 - self.key as f64)
+        / (other.key as f64 - self.key as f64))
         * (other.position as f64 - self.position as f64)
       ).floor() as PositionT 
     }
@@ -79,7 +79,7 @@ impl KeyPositionRange {
     KeyPositionRange {
       key,
       offset: left_offset,
-      length: right_offset - left_offset,
+      length: right_offset.saturating_sub(left_offset),
     }
   }
 }

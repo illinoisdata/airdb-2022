@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::path::PathBuf;
 
@@ -9,11 +10,11 @@ use crate::store::KeyBuffer;
 
 
 pub struct StoreDesigner {
-  storage: Rc<ExternalStorage>,
+  storage: Rc<RefCell<ExternalStorage>>,
 }
 
 impl StoreDesigner {
-  pub fn new(storage: &Rc<ExternalStorage>) -> StoreDesigner {
+  pub fn new(storage: &Rc<RefCell<ExternalStorage>>) -> StoreDesigner {
     StoreDesigner { storage: Rc::clone(storage) }
   }
 

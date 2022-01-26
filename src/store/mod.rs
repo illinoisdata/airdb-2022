@@ -1,6 +1,5 @@
 use serde::{Serialize, Deserialize};
 use std::fmt::Debug;
-use std::io;
 
 use crate::common::error::GResult;
 use crate::meta::Context;
@@ -15,8 +14,8 @@ pub trait DataStore: DataStoreMetaserde + Debug {
 }
 
 pub trait DataStoreWriter {
-  fn write(&mut self, kb: &KeyBuffer) -> io::Result<()>;
-  fn commit(self: Box<Self>) -> io::Result<KeyPositionCollection>;
+  fn write(&mut self, kb: &KeyBuffer) -> GResult<()>;
+  fn commit(self: Box<Self>) -> GResult<KeyPositionCollection>;
 }
 
 pub trait DataStoreReader {

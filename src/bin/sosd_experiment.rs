@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
@@ -18,6 +19,7 @@ use airindex::io::profile::StorageProfile;
 use airindex::io::storage::Adaptor;
 use airindex::io::storage::ExternalStorage;
 use airindex::io::storage::FileSystemAdaptor;
+use airindex::io::storage::MmapAdaptor;
 use airindex::meta;
 use airindex::meta::Context;
 use airindex::model::linear::DoubleLinearMultipleDrafter;
@@ -50,13 +52,6 @@ pub struct Cli {
   #[structopt(long)]
   dataset_name: String,
 
-  /// manual storage profile's latency in nanoseconds (affine)
-  #[structopt(long)]
-  affine_latency_ns: Option<u64>,
-  /// manual storage profile's bandwidth in MB/s (affine)
-  #[structopt(long)]
-  affine_bandwidth_mbps: Option<f64>,
-
   /// data type in the blob [uint32, uint64]
   #[structopt(long)]
   sosd_dtype: String,
@@ -69,6 +64,23 @@ pub struct Cli {
   /// relative path from root_path to the sosd data blob
   #[structopt(long)]
   keyset_path: String,
+
+  /// manual storage profile's latency in nanoseconds (affine)
+  #[structopt(long)]
+  affine_latency_ns: Option<u64>,
+  /// manual storage profile's bandwidth in MB/s (affine)
+  #[structopt(long)]
+  affine_bandwidth_mbps: Option<f64>,
+
+
+  /* For testing/debugging */
+
+  /// disable cache to storage IO interface
+  #[structopt(long)]
+  no_cache: bool,
+  /// number of queries to test
+  #[structopt(long)]
+  num_samples: Option<usize>,
 }
 
 
@@ -93,11 +105,17 @@ impl Experiment {
   pub fn from(args: &Cli) -> GResult<Experiment> {
     let mut context = Context::new();
     context.put_storage({
-      let fsa = Box::new(FileSystemAdaptor::new(&args.root_path));
-      &Rc::new(ExternalStorage::new(fsa))
+      let adaptor = if args.no_cache {
+        Box::new(FileSystemAdaptor::new(&args.root_path)) as Box<dyn Adaptor>
+      } else {
+        Box::new(MmapAdaptor::new(&args.root_path)) as Box<dyn Adaptor>
+      };
+      &Rc::new(RefCell::new(ExternalStorage::new(adaptor)))
     });
     if let Some(path) = PathBuf::from(&args.db_path).parent() {
-      context.storage.as_ref().unwrap().create(path)?;
+      context.storage.as_ref().unwrap()
+        .borrow_mut()
+        .create(path)?;
     }
     let db_meta_path = PathBuf::from(format!("{}_meta", args.db_path.clone()));
     Ok(Experiment {
@@ -133,7 +151,9 @@ impl Experiment {
     let meta_bytes = meta::serialize(&meta)?;
 
     // write metadata
-    self.context.storage.as_ref().unwrap().write_all(&self.db_meta_path, &meta_bytes)?;
+    self.context.storage.as_ref().unwrap()
+      .borrow_mut()
+      .write_all(&self.db_meta_path, &meta_bytes)?;
 
     Ok(())
   }
@@ -196,6 +216,10 @@ impl Experiment {
   pub fn benchmark(&self, args: &Cli) -> GResult<(Vec<u128>, Vec<usize>)> {
     // read keyset
     let test_keyset = read_keyset(args.keyset_path.clone())?;
+    let num_samples = match args.num_samples {
+      Some(num_samples) => num_samples,
+      None => test_keyset.len(),
+    };
 
     // start the clock and begin db/index reconstruction
     let mut time_measures = Vec::new();
@@ -204,7 +228,8 @@ impl Experiment {
     let freq_mul: f64 = 1.1;
     let start_time = Instant::now();
     let sosd_db = self.reload()?;
-    for (idx, test_kr) in test_keyset.iter().enumerate() {
+    for idx in 0..num_samples {
+      let test_kr = &test_keyset[idx];
       let rcv_kr = sosd_db.rank_of(test_kr.key)?
         .unwrap_or_else(|| panic!("Existing key {} not found", test_kr.key));
       assert_eq!(rcv_kr.key, test_kr.key);
@@ -226,7 +251,9 @@ impl Experiment {
   }
 
   fn reload(&self) -> GResult<SOSDRankDB> {
-    let meta_bytes = self.context.storage.as_ref().unwrap().read_all(&self.db_meta_path)?;
+    let meta_bytes = self.context.storage.as_ref().unwrap()
+      .borrow_mut()
+      .read_all(&self.db_meta_path)?;
     let meta = meta::deserialize(&meta_bytes)?;
     SOSDRankDB::from_meta(meta, &self.context)
   }
@@ -234,7 +261,9 @@ impl Experiment {
 
 fn main_guarded() -> GResult<()> {
   // execution init
-  env_logger::init();
+  env_logger::Builder::from_default_env()
+    .format_timestamp_micros()
+    .init();
 
   // parse args
   let args = Cli::from_args();

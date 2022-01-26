@@ -1,4 +1,5 @@
 use serde::{Serialize, Deserialize};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::common::error::GResult;
@@ -6,7 +7,7 @@ use crate::io::storage::ExternalStorage;
 
 
 pub struct Context {
-  pub storage: Option<Rc<ExternalStorage>>,
+  pub storage: Option<Rc<RefCell<ExternalStorage>>>,
 }
 
 impl Default for Context {
@@ -22,7 +23,7 @@ impl Context {
     }
   }
 
-  pub fn put_storage(&mut self, storage: &Rc<ExternalStorage>) {
+  pub fn put_storage(&mut self, storage: &Rc<RefCell<ExternalStorage>>) {
     if let Some(storage) = &self.storage {
       // if exists, check same object
       assert!(Rc::ptr_eq(storage, storage));
