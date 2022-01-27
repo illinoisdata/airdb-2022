@@ -22,7 +22,7 @@ pub trait DataStoreReader {
   fn iter(&self) -> Box<dyn DataStoreReaderIter + '_>;
 }
 
-pub trait DataStoreReaderIter<'a>: Iterator<Item = &'a [u8]> {}
+pub trait DataStoreReaderIter: Iterator<Item = KeyBuffer> {}
 
 pub mod key_position;
 pub mod key_buffer;

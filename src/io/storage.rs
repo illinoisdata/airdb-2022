@@ -111,7 +111,11 @@ pub struct MmapAdaptor {
 fn new_mmap(path_buf: &Path) -> GResult<Mmap> {
   log::debug!("Mmaping {:?}", path_buf);
   let file = File::open(path_buf)?;
-  Ok(unsafe { MmapOptions::new().populate().map(&file)? })
+  Ok(unsafe {
+    MmapOptions::new()
+      // .populate()
+      .map(&file)?
+  })
 }
 
 impl MmapAdaptor {

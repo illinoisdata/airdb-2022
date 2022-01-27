@@ -138,7 +138,7 @@ impl BlockStore {
     // calculate first and last page indexes
     let end_offset = offset + length;
     let start_page_idx = offset / self.state.cfg.page_size + (offset % self.state.cfg.page_size != 0) as usize;
-    let end_page_idx = end_offset / self.state.cfg.page_size;
+    let end_page_idx = std::cmp::min(end_offset / self.state.cfg.page_size, self.state.total_pages);
 
     // make read requests
     let requests = self.read_page_range_requests(start_page_idx, end_page_idx);
@@ -314,7 +314,7 @@ impl<'a> BlockStoreWriter<'a> {
 
 impl<'a> DataStoreWriter for BlockStoreWriter<'a> {
   fn write(&mut self, kb: &KeyBuffer) -> GResult<()> {
-    let key_offset = self.write_dbuffer(&kb.buffer)?;
+    let key_offset = self.write_dbuffer(&kb.serialize())?;
     self.key_positions.push(kb.key, key_offset);
     Ok(())
   }
@@ -365,12 +365,8 @@ impl DataStoreReader for BlockStoreReader {
   }
 }
 
-impl<'a> DataStoreReaderIter<'a> for BlockStoreReaderIter<'a> {}
-
-impl<'a> Iterator for BlockStoreReaderIter<'a> {
-  type Item = &'a [u8];
-
-  fn next(&mut self) -> Option<Self::Item> {
+impl<'a> BlockStoreReaderIter<'a> {
+  fn next_block(&mut self) -> Option<&[u8]> {
     if self.chunk_idx < self.r.chunk_flags.len() {
       // calculate boundary
       let dbuffer_offset = self.chunk_idx * self.r.chunk_size;
@@ -389,6 +385,16 @@ impl<'a> Iterator for BlockStoreReaderIter<'a> {
     } else {
       None
     }
+  }
+}
+
+impl<'a> DataStoreReaderIter for BlockStoreReaderIter<'a> {}
+
+impl<'a> Iterator for BlockStoreReaderIter<'a> {
+  type Item = KeyBuffer;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    self.next_block().map(KeyBuffer::deserialize)
   }
 }
 
@@ -478,16 +484,17 @@ mod tests {
     // check rereading from position
     for idx in 0..kps.len() {
       let kr = kps.range_at(idx)?;
+      let cur_key = kr.key;
       let cur_offset = kr.offset;
       let cur_length = kr.length;
       let reader = bstore.read_within(cur_offset, cur_length)?;
       let mut reader_iter = reader.iter();
 
       // check correctness
-      let dbuffer = reader_iter.next().expect("Expect more data buffer");
-      // assert_eq!(kb.key, cur_key, "Read key does not match with the given map");
-      // assert_eq!(kb.key, test_keys[idx], "Read key does not match");
-      assert_eq!(dbuffer, test_buffers[idx].to_vec(), "Read buffer does not match");
+      let kb = reader_iter.next().expect("Expect more data buffer");
+      assert_eq!(kb.key, cur_key, "Read key does not match with the given map");
+      assert_eq!(kb.key, test_keys[idx], "Read key does not match");
+      assert_eq!(kb.buffer, test_buffers[idx].to_vec(), "Read buffer does not match");
 
       // check completeness
       assert!(reader_iter.next().is_none(), "Expected no more data buffer")
@@ -507,9 +514,9 @@ mod tests {
 
       // should read 2, 3, 4, 5, 6 pairs
       for idx in 2..7 {  
-        let dbuffer = reader_iter.next().expect("Expect more data buffer");
-        // assert_eq!(kb.key, test_keys[idx], "Read key does not match (partial)");
-        assert_eq!(dbuffer, test_buffers[idx].to_vec(), "Read buffer does not match (partial)");
+        let kb = reader_iter.next().expect("Expect more data buffer");
+        assert_eq!(kb.key, test_keys[idx], "Read key does not match (partial)");
+        assert_eq!(kb.buffer, test_buffers[idx].to_vec(), "Read buffer does not match (partial)");
       }
       assert!(reader_iter.next().is_none(), "Expected no more data buffer (partial)")
     }
@@ -518,11 +525,11 @@ mod tests {
     {
       let reader = bstore.read_all()?;
       let mut reader_iter = reader.iter();
-      for cur_value in test_buffers.iter() {
+      for (cur_key, cur_value) in test_keys.iter().zip(test_buffers.iter()) {
         // get next and check correctness
-        let dbuffer = reader_iter.next().expect("Expect more data buffer");
-        // assert_eq!(kb.key, *cur_key, "Read key does not match");
-        assert_eq!(dbuffer, cur_value.to_vec(), "Read buffer does not match");
+        let kb = reader_iter.next().expect("Expect more data buffer");
+        assert_eq!(kb.key, *cur_key, "Read key does not match");
+        assert_eq!(kb.buffer, cur_value.to_vec(), "Read buffer does not match");
       } 
       assert!(reader_iter.next().is_none(), "Expected no more data buffer (read all)")
     }

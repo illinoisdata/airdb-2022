@@ -32,7 +32,7 @@ Learned index on external memory model for key-value data
 
 - [ ] Async IO
 - [ ] Zero-copy block store reads
-- [ ] IO buffer pool (or mmap)
+- [x] IO buffer pool (or mmap)
 - [ ] Fixed-size bundling of linear functions
 
 ## Refactoring List

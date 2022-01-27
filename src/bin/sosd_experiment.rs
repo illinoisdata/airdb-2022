@@ -237,12 +237,12 @@ impl Experiment {
       if idx + 1 == count_milestone || idx + 1 == test_keyset.len() {
         let time_elapsed = start_time.elapsed();
         time_measures.push(time_elapsed.as_nanos());
-        query_counts.push(count_milestone);
+        query_counts.push(idx + 1);
         log::info!(
             "t= {:?}: {} counts, {:?}/op",
             time_elapsed,
-            count_milestone,
-            time_elapsed / count_milestone.try_into().unwrap()
+            idx + 1,
+            time_elapsed / (idx + 1).try_into().unwrap()
         );
         count_milestone = (count_milestone as f64 * freq_mul).ceil() as usize;
       }

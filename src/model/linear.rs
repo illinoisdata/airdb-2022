@@ -18,7 +18,6 @@ use crate::model::toolkit::BuilderAsDrafter;
 use crate::model::toolkit::MultipleDrafter;
 use crate::store::key_buffer::KeyBuffer;
 use crate::store::key_position::KEY_LENGTH;
-use crate::store::key_position::KeyInterval;
 use crate::store::key_position::KeyPosition;
 use crate::store::key_position::KeyPositionRange;
 use crate::store::key_position::KeyT;
@@ -50,10 +49,6 @@ struct LinearModel {
 }
 
 impl LinearModel {
-  fn coverage(&self) -> KeyInterval {
-    KeyInterval{ left_key: self.left_kp.key, right_key: self.right_kp.key }
-  }
-
   fn evaluate(&self, key: &KeyT) -> PositionT {
     // PANIC: this would overflow if key is outside of the coverage...
     self.left_kp.interpolate_with(&self.right_kp, key)
@@ -68,10 +63,6 @@ struct DoubleLinearModel {
 }
 
 impl Model for DoubleLinearModel {
-  fn coverage(&self) -> KeyInterval {
-    self.lower_line.coverage().intersect(&self.upper_line.coverage())
-  }
-
   fn predict(&self, key: &KeyT) -> KeyPositionRange {
     // PANIC: this would overflow if key is outside of the coverage...
     let left_offset = self.lower_line.evaluate(key).saturating_sub(128);  // HACK: the box is always less than 8 byte high...
@@ -369,11 +360,11 @@ mod tests {
 
   fn test_same_model(model_1: &Box<dyn Model>, model_2: &Box<DoubleLinearModel>) {
     // test coverage
-    assert_eq!(model_1.coverage(), model_2.coverage(), "Models have different coverage");
-    let coverage = model_1.coverage();
+    // assert_eq!(model_1.coverage(), model_2.coverage(), "Models have different coverage");
+    // let coverage = model_1.coverage();
 
     // test predict
-    for test_key in coverage.left_key..coverage.right_key {
+    for test_key in 0..1000 {
       assert_eq!(
         model_1.predict(&test_key),
         model_2.predict(&test_key),

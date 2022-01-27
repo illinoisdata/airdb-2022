@@ -19,6 +19,7 @@ use crate::model::ModelReconMeta;
 use crate::store::DataStore;
 use crate::store::DataStoreMeta;
 use crate::store::DataStoreReader;
+use crate::store::key_buffer::KeyBuffer;
 use crate::store::key_position::KeyPositionCollection;
 use crate::store::key_position::KeyPositionRange;
 use crate::store::key_position::KeyT;
@@ -29,7 +30,7 @@ struct OutofCoverageError;
 
 impl fmt::Display for OutofCoverageError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "this index does not cover the requested key")
+        write!(f, "submodels in the predicted range does not cover the given key")
     }
 }
 
@@ -43,23 +44,26 @@ pub struct PiecewiseIndex {
 
 impl PiecewiseIndex {
   fn predict_from_reader(&self, reader: Box<dyn DataStoreReader>, key: &KeyT) -> GResult<KeyPositionRange> {
-    for model_buffer in reader.iter() {
-      let model = self.model_serde.reconstruct(model_buffer)?;
-      let coverage = model.coverage();
-      if coverage.cover(key) {
-        return Ok(model.predict(key));
-      } else if coverage.greater_than(key) {
-        // already read pass the coverage for this key
-        return Err(Box::new(OutofCoverageError));
-      }
-    }
-    Err(Box::new(OutofCoverageError))
+    let model_kb = PiecewiseIndex::select_relevant_kb(reader, key)?;
+    let model = self.model_serde.reconstruct(&model_kb.buffer)?;
+    Ok(model.predict(key))
+  }
+
+  fn select_relevant_kb(reader: Box<dyn DataStoreReader>, key: &KeyT) -> GResult<KeyBuffer> {
+    // assuming key-buffers are sorted by key
+    let last_kb = reader.iter().take_while(|kb| kb.key <= *key).last();
+
+    // // not assuming ordered by key, but more deserialization
+    // let last_kb = reader.iter().filter(|kb| kb.key <= *key).max_by_key(|kb| kb.key);
+
+    last_kb.ok_or_else(|| Box::new(OutofCoverageError) as Box<dyn Error>)
   }
 }
 
 impl Index for PiecewiseIndex {
   fn predict(&self, key: &KeyT) -> GResult<KeyPositionRange> {
     let reader = self.data_store.read_all()?;
+    log::debug!("received piecewise buffer");  // TEMP
     self.predict_from_reader(reader, key)
   }
 }
@@ -67,6 +71,7 @@ impl Index for PiecewiseIndex {
 impl PartialIndex for PiecewiseIndex {
   fn predict_within(&self, kr: &KeyPositionRange) -> GResult<KeyPositionRange> {
     let reader = self.data_store.read_within(kr.offset, kr.length)?;
+    log::debug!("received piecewise buffer, partial {:?}", kr);  // TEMP
     self.predict_from_reader(reader, &kr.key)
   }
 }

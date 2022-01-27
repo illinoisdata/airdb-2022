@@ -17,6 +17,7 @@ use crate::store::DataStoreReaderIter;
 use crate::store::DataStoreWriter;
 use crate::store::key_buffer::KeyBuffer;
 use crate::store::key_position::KeyPositionCollection;
+use crate::store::key_position::KEY_LENGTH;
 use crate::store::key_position::PositionT;
 
 
@@ -46,7 +47,7 @@ impl ArrayStore {
       storage: Rc::clone(storage),
       state: ArrayStoreState {
         array_path,
-        data_size,
+        data_size: data_size + KEY_LENGTH,  // KeyBuffer also serialize the key
         offset: 0,
         length: 0,
       },
@@ -70,6 +71,10 @@ impl ArrayStore {
     Ok(ArrayStoreReader::new(array_buffer, start_rank, self.state.data_size))
   }
 
+  pub fn read_array_all(&self) -> GResult<ArrayStoreReader> {
+    self.read_array_within(0, self.state.length * self.state.data_size)
+  }
+
   pub fn data_size(&self) -> usize {
     self.state.data_size
   }
@@ -86,7 +91,7 @@ impl ArrayStore {
     // calculate first and last "page" indexes
     let end_offset = offset + length;
     let start_rank = offset / self.state.data_size + (offset % self.state.data_size != 0) as usize;
-    let end_rank = end_offset / self.state.data_size;
+    let end_rank = std::cmp::min(end_offset / self.state.data_size, self.state.length);
 
     // make read requests
     let array_buffer = self.storage.borrow_mut().read_range(
@@ -179,7 +184,7 @@ impl<'a> ArrayStoreWriter<'a> {
 
 impl<'a> DataStoreWriter for ArrayStoreWriter<'a> {
   fn write(&mut self, kb: &KeyBuffer) -> GResult<()> {
-    let key_offset = self.write_dbuffer(&kb.buffer)?;
+    let key_offset = self.write_dbuffer(&kb.serialize())?;
     self.key_positions.push(kb.key, key_offset);
     Ok(())
   }
@@ -233,12 +238,8 @@ impl DataStoreReader for ArrayStoreReader {
   }
 }
 
-impl<'a> DataStoreReaderIter<'a> for ArrayStoreReaderIter<'a> {}
-
-impl<'a> Iterator for ArrayStoreReaderIter<'a> {
-  type Item = &'a [u8];
-  
-  fn next(&mut self) -> Option<Self::Item> {
+impl<'a> ArrayStoreReaderIter<'a> {
+  fn next_block(&mut self) -> Option<&[u8]> {
     if self.current_offset < self.r.array_buffer.len() {
       let dbuffer = &self.r.array_buffer[self.current_offset..self.current_offset+self.r.data_size];
       self.current_offset += self.r.data_size;
@@ -246,6 +247,16 @@ impl<'a> Iterator for ArrayStoreReaderIter<'a> {
     } else {
       None
     }
+  }
+}
+
+impl<'a> DataStoreReaderIter for ArrayStoreReaderIter<'a> {}
+
+impl<'a> Iterator for ArrayStoreReaderIter<'a> {
+  type Item = KeyBuffer;
+  
+  fn next(&mut self) -> Option<Self::Item> {
+    self.next_block().map(KeyBuffer::deserialize)
   }
 }
 
@@ -332,16 +343,17 @@ mod tests {
     // check rereading from position
     for idx in 0..kps.len() {
       let kr = kps.range_at(idx)?;
+      let cur_key = kr.key;
       let cur_offset = kr.offset;
       let cur_length = kr.length;
       let reader = arrstore.read_within(cur_offset, cur_length)?;
       let mut reader_iter = reader.iter();
 
       // check correctness
-      let dbuffer = reader_iter.next().expect("Expect more data buffer");
-      // assert_eq!(kb.key, cur_key, "Read key does not match with the given map");
-      // assert_eq!(kb.key, test_keys[idx], "Read key does not match");
-      assert_eq!(dbuffer, test_buffers[idx].to_vec(), "Read buffer does not match");
+      let kb = reader_iter.next().expect("Expect more data buffer");
+      assert_eq!(kb.key, cur_key, "Read key does not match with the given map");
+      assert_eq!(kb.key, test_keys[idx], "Read key does not match");
+      assert_eq!(kb.buffer, test_buffers[idx].to_vec(), "Read buffer does not match");
 
       // check completeness
       assert!(reader_iter.next().is_none(), "Expected no more data buffer")
@@ -361,9 +373,9 @@ mod tests {
 
       // should read 2, 3, 4, 5, 6 pairs
       for idx in 2..7 {  
-        let dbuffer = reader_iter.next().expect("Expect more data buffer");
-        // assert_eq!(kb.key, test_keys[idx], "Read key does not match (partial)");
-        assert_eq!(dbuffer, test_buffers[idx].to_vec(), "Read buffer does not match (partial)");
+        let kb = reader_iter.next().expect("Expect more data buffer");
+        assert_eq!(kb.key, test_keys[idx], "Read key does not match (partial)");
+        assert_eq!(kb.buffer, test_buffers[idx].to_vec(), "Read buffer does not match (partial)");
       }
       assert!(reader_iter.next().is_none(), "Expected no more data buffer (partial)")
     }
@@ -372,11 +384,11 @@ mod tests {
     {
       let reader = arrstore.read_all()?;
       let mut reader_iter = reader.iter();
-      for cur_value in test_buffers.iter() {
+      for (cur_key, cur_value) in test_keys.iter().zip(test_buffers.iter()) {
         // get next and check correctness
-        let dbuffer = reader_iter.next().expect("Expect more data buffer");
-        // assert_eq!(kb.key, *cur_key, "Read key does not match");
-        assert_eq!(dbuffer, cur_value.to_vec(), "Read buffer does not match");
+        let kb = reader_iter.next().expect("Expect more data buffer");
+        assert_eq!(kb.key, *cur_key, "Read key does not match");
+        assert_eq!(kb.buffer, cur_value.to_vec(), "Read buffer does not match");
       } 
       assert!(reader_iter.next().is_none(), "Expected no more data buffer (read all)")
     }

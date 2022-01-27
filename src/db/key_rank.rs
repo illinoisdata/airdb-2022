@@ -17,7 +17,6 @@ use crate::index::IndexMeta;
 use crate::meta::Context;
 use crate::store::array_store::ArrayStore;
 use crate::store::array_store::ArrayStoreState;
-use crate::store::DataStore;
 use crate::store::key_position::KeyPositionCollection;
 use crate::store::key_position::KeyT;
 
@@ -58,9 +57,11 @@ impl SOSDRankDB {
       .expect("Index missing, trying to accessing empty data store")
       .predict(&key)?;
     let reader = self.array_store.read_array_within(kpr.offset, kpr.length)?;
-    for (dbuffer, rank) in reader.iter_with_rank() {
+    log::debug!("received rank buffer ({} bytes)", kpr.length);
+    for (idx, (dbuffer, rank)) in reader.iter_with_rank().enumerate() {
       let current_key = self.deserialize_key(dbuffer);
       if current_key == key {
+        log::debug!("found rank at idx= {}", idx);
         return Ok(Some(KeyRank{ key: current_key, rank }));
       }
     }
@@ -71,10 +72,10 @@ impl SOSDRankDB {
     // SOSD blob contains uint32/uint64s written next to each other
     // We can reconstruct the kps by multiplying the rank with data size
     let mut kps = KeyPositionCollection::new();
-    let reader = self.array_store.read_all()?;
+    let reader = self.array_store.read_array_all()?;
     let mut current_offset = 0;
     let mut last_key = 0;
-    for dbuffer in reader.iter() {
+    for (dbuffer, _rank) in reader.iter_with_rank() {
       let current_key = self.deserialize_key(dbuffer);
       if last_key == current_key {
         continue

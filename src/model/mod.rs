@@ -6,7 +6,6 @@ use crate::common::error::GResult;
 use crate::io::profile::StorageProfile;
 use crate::meta::Context;
 use crate::store::key_buffer::KeyBuffer;
-use crate::store::key_position::KeyInterval;
 use crate::store::key_position::KeyPositionCollection;
 use crate::store::key_position::KeyPositionRange;
 use crate::store::key_position::KeyT;
@@ -17,8 +16,6 @@ type MaybeKeyBuffer = Option<KeyBuffer>;
 /* Models */
 
 pub trait Model {
-  // coverage within this model
-  fn coverage(&self) -> KeyInterval;  
   // predict position(s) for the key
   fn predict(&self, key: &KeyT) -> KeyPositionRange;
 }
