@@ -5,7 +5,6 @@ use std::rc::Rc;
 use structopt::StructOpt;
 
 use airindex::common::error::GResult;
-use airindex::db::key_rank::generate_keyset;
 use airindex::db::key_rank::SOSDRankDB;
 use airindex::io::storage::ExternalStorage;
 use airindex::io::storage::MmapAdaptor;
@@ -50,7 +49,7 @@ fn main() -> GResult<()> {
   observe_kps(&kps, 5);
 
   // randomly select a subset of keys
-  generate_keyset(&kps, args.keyset_path.clone(), args.num_keyset)?;
+  sosd_db.generate_keyset(&kps, args.keyset_path.clone(), args.num_keyset)?;
   println!("Wrote keyset file at {} with {} keys", args.keyset_path, args.num_keyset);
   Ok(())
 }

@@ -11,7 +11,7 @@ pub type PositionT = usize;
 pub const KEY_LENGTH: usize = std::mem::size_of::<KeyT>();
 pub const POSITION_LENGTH: usize = std::mem::size_of::<PositionT>();
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct KeyPosition {
   pub key: KeyT,  // TODO: generic Num + PartialOrd type
   pub position: PositionT,
@@ -30,8 +30,8 @@ impl KPDirection {
     }
   }
 
-  pub fn cross_product(&self, other: &KPDirection) -> f64 {
-    (self.x * other.y) - (self.y * other.x)
+  pub fn is_lower_than(&self, other: &KPDirection) -> bool {
+    self.y * other.x < self.x * other.y
   }
 }
 
@@ -49,7 +49,7 @@ impl KeyPosition {
   }
 
   pub fn is_lower_slope_than(&self, other: &KeyPosition, pov: &KeyPosition) -> bool {
-    KPDirection::new(self, pov).cross_product(&KPDirection::new(other, pov)) > 0.0 
+    KPDirection::new(self, pov).is_lower_than(&KPDirection::new(other, pov))
   }
 }
 
@@ -67,17 +67,19 @@ impl<'a, 'b> Sub<&'b KeyPosition> for &'a KeyPosition {
 
 /* Key-position-length */
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct KeyPositionRange {
-  pub key: KeyT,
+  pub key_l: KeyT,
+  pub key_r: KeyT,
   pub offset: PositionT,
   pub length: PositionT,
 }
 
 impl KeyPositionRange {
-  pub fn from_bound(key: KeyT, left_offset: PositionT, right_offset: PositionT) -> KeyPositionRange {
+  pub fn from_bound(key_l: KeyT, key_r: KeyT, left_offset: PositionT, right_offset: PositionT) -> KeyPositionRange {
     KeyPositionRange {
-      key,
+      key_l,
+      key_r,
       offset: left_offset,
       length: right_offset.saturating_sub(left_offset),
     }
@@ -120,6 +122,8 @@ impl KeyInterval {
 
 pub struct KeyPositionCollection {
   kps: Vec<KeyPosition>,
+  // start_key: KeyT,
+  end_key: KeyT,
   start_position: PositionT,
   end_position: PositionT,
 }
@@ -134,16 +138,20 @@ impl KeyPositionCollection {
   pub fn new() -> KeyPositionCollection {
     KeyPositionCollection{
       kps: Vec::new(),
+      // start_key: 0,
+      end_key: 0,
       start_position: 0,
       end_position: 0,
     }
   }
 
   pub fn push(&mut self, key: KeyT, position: PositionT) {
+    // self.start_key = cmp::min(self.start_key, key);
+    self.end_key = cmp::max(self.end_key, key);
     self.kps.push(KeyPosition{ key, position })
   }
 
-  pub fn set_position_range(&mut self, start_position: usize, end_position: usize) {
+  pub fn set_position_range(&mut self, start_position: PositionT, end_position: PositionT) {
     self.start_position = start_position;
     self.end_position = end_position;
   }
@@ -176,12 +184,14 @@ impl KeyPositionCollection {
   pub fn range_at(&self, idx: usize) -> Result<KeyPositionRange, &str> {
     match idx.cmp(&(self.len() - 1)) {
       Ordering::Less => Ok(KeyPositionRange{
-        key: self.kps[idx].key,
+        key_l: self.kps[idx].key,
+        key_r: self.kps[idx+1].key,
         offset: self.kps[idx].position,
         length: self.kps[idx+1].position - self.kps[idx].position,
       }),
       Ordering::Equal => Ok(KeyPositionRange{
-        key: self.kps[idx].key,
+        key_l: self.kps[idx].key,
+        key_r: self.end_key,
         offset: self.kps[idx].position,
         length: self.end_position - self.kps[idx].position,
       }),

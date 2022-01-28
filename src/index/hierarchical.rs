@@ -77,8 +77,10 @@ impl<'a> BalanceStackIndexBuilder<'a> {
       // try next
       let upper_index = self.bns_at_layer(&lower_index_kps, layer_idx + 1)?;
       let lower_index = Box::new(piecewise_index) as Box<dyn PartialIndex>;
-      let stack_index = Box::new(StackIndex { upper_index, lower_index });
-      Ok(stack_index)
+      Ok(Box::new(StackIndex {
+        upper_index,
+        lower_index
+      }))
     } else {
       // fetching whole data layer is faster than building index
       Ok(Box::new(NaiveIndex::build(kps)))
@@ -93,6 +95,66 @@ impl<'a> BalanceStackIndexBuilder<'a> {
 impl<'a> IndexBuilder for BalanceStackIndexBuilder<'a> {
   fn build_index(&self, kps: &KeyPositionCollection) -> GResult<Box<dyn Index>> {
     self.bns_at_layer(kps, 1)
+  }
+}
+
+pub struct BoundedTopStackIndexBuilder<'a> {
+  storage: Rc<RefCell<ExternalStorage>>,
+  drafter: Box<dyn ModelDrafter>,
+  profile: &'a dyn StorageProfile,
+  top_load: usize,
+  prefix_name: String,
+}
+
+impl<'a> BoundedTopStackIndexBuilder<'a> {
+  pub fn new(storage: &Rc<RefCell<ExternalStorage>>, drafter: Box<dyn ModelDrafter>, profile: &'a dyn StorageProfile, top_load: usize, prefix_name: String) -> BoundedTopStackIndexBuilder<'a> {
+    BoundedTopStackIndexBuilder {
+      storage: Rc::clone(storage),
+      drafter,
+      profile,
+      top_load,
+      prefix_name,
+    }
+  }
+}
+
+impl<'a> BoundedTopStackIndexBuilder<'a> {
+  pub fn bts_at_layer(  // balance & stack, at layer
+    &self,
+    kps: &KeyPositionCollection,
+    layer_idx: usize,
+  ) -> GResult<Box<dyn Index>> {
+    log::info!("Check total bytes {} <==> {}", kps.total_bytes(), self.top_load);
+    if kps.total_bytes() > self.top_load {
+      // kps is still large, so build and stack more index
+      let model_draft = self.drafter.draft(kps, self.profile)?;
+
+      // persist
+      let data_store = StoreDesigner::new(&self.storage)
+        .design_for_kbs(&model_draft.key_buffers, &self.layer_name(layer_idx));
+      let (piecewise_index, lower_index_kps) = PiecewiseIndex::craft(model_draft, data_store)?;
+
+      // try next
+      let upper_index = self.bts_at_layer(&lower_index_kps, layer_idx + 1)?;
+      let lower_index = Box::new(piecewise_index) as Box<dyn PartialIndex>;
+      Ok(Box::new(StackIndex {
+        upper_index,
+        lower_index
+      }))
+    } else {
+      // fetching whole data layer is faster than building index
+      Ok(Box::new(NaiveIndex::build(kps)))
+    }
+  }
+
+  fn layer_name(&self, layer_idx: usize) -> String {
+    format!("{}_{}", self.prefix_name, layer_idx)
+  }
+}
+
+impl<'a> IndexBuilder for BoundedTopStackIndexBuilder<'a> {
+  fn build_index(&self, kps: &KeyPositionCollection) -> GResult<Box<dyn Index>> {
+    self.bts_at_layer(kps, 1)
   }
 }
 

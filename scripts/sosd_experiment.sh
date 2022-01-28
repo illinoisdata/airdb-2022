@@ -7,20 +7,21 @@ int_handler() {
 }
 trap 'int_handler' INT
 
-if [ "$#" -ne 5 ]
+if [ "$#" -ne 6 ]
 then
-  echo "Require three argument (BLOB_ROOT, KEYSET_ROOT, DB_ROOT, ACTION, RESET_SCRIPT), $# provided"
+  echo "Require three argument (BLOB_ROOT, KEYSET_ROOT, DB_ROOT, INDEX_TYPE, ACTION, RESET_SCRIPT), $# provided"
   exit 1
 fi
 
 BLOB_ROOT=$1
 KEYSET_ROOT=$2
 DB_ROOT=$3
-ACTION=$4
-RESET_SCRIPT=$5
+INDEX_TYPE=$4
+ACTION=$5
+RESET_SCRIPT=$6
 PROFILE="--affine-latency-ns 108000000 --affine-bandwidth-mbps 104.0"  # nfs
 # PROFILE="--affine-latency-ns 22000 --affine-bandwidth-mbps 2500.0"  # ssd
-echo "Using BLOB_ROOT=${BLOB_ROOT}, KEYSET_ROOT=${KEYSET_ROOT}, DB_ROOT=${DB_ROOT}, ACTION=${ACTION}, RESET_SCRIPT=${RESET_SCRIPT}"
+echo "Using BLOB_ROOT=${BLOB_ROOT}, KEYSET_ROOT=${KEYSET_ROOT}, DB_ROOT=${DB_ROOT}, INDEX_TYPE=${INDEX_TYPE}, ACTION=${ACTION}, RESET_SCRIPT=${RESET_SCRIPT}"
 if [[ $ACTION != "build" && $ACTION != "benchmark" ]]
 then
   echo "Invalid ACTION [build | benchmark]"
@@ -58,7 +59,7 @@ build () {
   keyset_path="${KEYSET_ROOT}/${sosd_blob[0]}_${sosd_blob[1]}M_${sosd_blob[2]}_ks"
 
   set -x
-  RUST_LOG=info RUST_BACKTRACE=full target/release/sosd_experiment --root-path "./" --db-path "${DB_ROOT}/${blob_name}" --out-path sosd_build_out.jsons --dataset-name blob --sosd-blob-path "${BLOB_ROOT}/${blob_name}" --keyset-path "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} ${PROFILE} --do-build
+  RUST_LOG=info RUST_BACKTRACE=full target/release/sosd_experiment --root-path "./" --db-path "${DB_ROOT}/${blob_name}_${INDEX_TYPE}" --index-type ${INDEX_TYPE} --out-path sosd_build_out.jsons --dataset-name blob --sosd-blob-path "${BLOB_ROOT}/${blob_name}" --keyset-path "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} ${PROFILE} --do-build
   set +x
 }
 
@@ -72,7 +73,7 @@ benchmark () {
   for ((j = 0; j < 10; j++)) do
   bash ${RESET_SCRIPT}
   set -x
-  RUST_LOG=info RUST_BACKTRACE=full target/release/sosd_experiment --root-path "./" --db-path "${DB_ROOT}/${blob_name}" --out-path sosd_benchmark_out.jsons --dataset-name blob --sosd-blob-path "${BLOB_ROOT}/${blob_name}" --keyset-path "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} ${PROFILE} --do-benchmark
+  RUST_LOG=info RUST_BACKTRACE=full target/release/sosd_experiment --root-path "./" --db-path "${DB_ROOT}/${blob_name}_${INDEX_TYPE}" --index-type ${INDEX_TYPE} --out-path sosd_benchmark_out.jsons --dataset-name blob --sosd-blob-path "${BLOB_ROOT}/${blob_name}" --keyset-path "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} ${PROFILE} --do-benchmark
   set +x
   done
 }

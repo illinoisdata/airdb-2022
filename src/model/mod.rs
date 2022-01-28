@@ -15,7 +15,7 @@ type MaybeKeyBuffer = Option<KeyBuffer>;
 
 /* Models */
 
-pub trait Model {
+pub trait Model: Debug {
   // predict position(s) for the key
   fn predict(&self, key: &KeyT) -> KeyPositionRange;
 }
@@ -30,6 +30,7 @@ pub trait ModelRecon: ModelReconMetaserde + Debug {
 #[derive(Serialize, Deserialize)]
 pub enum ModelReconMeta {
   DoubleLinear { meta: linear::DoubleLinearModelReconMeta },
+  Step,
 }
 
 pub trait ModelReconMetaserde {
@@ -40,6 +41,7 @@ impl ModelReconMeta {
   pub fn from_meta(meta: ModelReconMeta, ctx: &Context) -> GResult<Box<dyn ModelRecon>> {
     let store = match meta {
       ModelReconMeta::DoubleLinear { meta } => Box::new(linear::DoubleLinearModelRecon::from_meta(meta, ctx)?) as Box<dyn ModelRecon>,
+      ModelReconMeta::Step => Box::new(step::StepModelRecon) as Box<dyn ModelRecon>,
     };
     Ok(store)
   }
@@ -54,7 +56,7 @@ pub struct BuilderFinalReport {
   pub model_loads: Vec<usize>,  // search load(s) in bytes assuming having the whole model
 }
 
-pub trait ModelBuilder: Sync {
+pub trait ModelBuilder: Debug + Sync {
   fn consume(&mut self, kpr: &KeyPositionRange) -> GResult<MaybeKeyBuffer>;
   fn finalize(self: Box<Self>) -> GResult<BuilderFinalReport>;
 }
@@ -81,3 +83,4 @@ pub trait ModelDrafter: Sync + Debug {
 
 pub mod toolkit;
 pub mod linear;
+pub mod step;

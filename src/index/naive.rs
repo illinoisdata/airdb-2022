@@ -27,7 +27,7 @@ impl NaiveIndex {
 
 impl Index for NaiveIndex {
   fn predict(&self, key: &KeyT) -> GResult<KeyPositionRange> {
-    Ok(KeyPositionRange::from_bound(*key, self.start_position, self.end_position))
+    Ok(KeyPositionRange::from_bound(*key, *key, self.start_position, self.end_position))
   }
 }
 

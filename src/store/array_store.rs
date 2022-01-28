@@ -343,7 +343,7 @@ mod tests {
     // check rereading from position
     for idx in 0..kps.len() {
       let kr = kps.range_at(idx)?;
-      let cur_key = kr.key;
+      let cur_key = kr.key_l;
       let cur_offset = kr.offset;
       let cur_length = kr.length;
       let reader = arrstore.read_within(cur_offset, cur_length)?;

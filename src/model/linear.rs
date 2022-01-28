@@ -67,7 +67,7 @@ impl Model for DoubleLinearModel {
     // PANIC: this would overflow if key is outside of the coverage...
     let left_offset = self.lower_line.evaluate(key).saturating_sub(128);  // HACK: the box is always less than 8 byte high...
     let right_offset = self.upper_line.evaluate(key) + 128;  // HACK: the box is always less than 8 byte high...
-    KeyPositionRange::from_bound(*key, left_offset, right_offset)
+    KeyPositionRange::from_bound(*key, *key, left_offset, right_offset)
   }
 }
 
@@ -208,6 +208,14 @@ pub struct DoubleLinearGreedyCorridorBuilder {
   upper_corridor: Option<Corridor>,
 }
 
+impl std::fmt::Debug for DoubleLinearGreedyCorridorBuilder {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("DoubleLinearGCB")
+      .field("max_error", &self.max_error)
+      .finish()
+  }
+}
+
 impl DoubleLinearGreedyCorridorBuilder {
   pub fn new(max_error: PositionT) -> DoubleLinearGreedyCorridorBuilder {
     DoubleLinearGreedyCorridorBuilder {
@@ -264,9 +272,9 @@ impl ModelBuilder for DoubleLinearGreedyCorridorBuilder {
 
         // Update lower corridor
         let new_lower_corridor = {
-          let lower_kp = KeyPosition{ key: kpr.key, position: kpr.offset.saturating_sub(self.max_error) };
-          let upper_kp = KeyPosition{ key: kpr.key, position: kpr.offset };
-          let kp_corridor = Corridor{ key: kpr.key, lower_kp, upper_kp };
+          let lower_kp = KeyPosition{ key: kpr.key_l, position: kpr.offset.saturating_sub(self.max_error) };
+          let upper_kp = KeyPosition{ key: kpr.key_l, position: kpr.offset };
+          let kp_corridor = Corridor{ key: kpr.key_l, lower_kp, upper_kp };
           match &self.lower_corridor {
             Some(corridor) => corridor.intersect(&kp_corridor, lower_pov),
             None => kp_corridor,
@@ -274,9 +282,9 @@ impl ModelBuilder for DoubleLinearGreedyCorridorBuilder {
         };
         let new_upper_corridor = {
           let upper_offset =  kpr.offset + kpr.length;
-          let lower_kp = KeyPosition{ key: kpr.key, position: upper_offset };
-          let upper_kp = KeyPosition{ key: kpr.key, position: upper_offset + self.max_error };
-          let kp_corridor = Corridor{ key: kpr.key, lower_kp, upper_kp };
+          let lower_kp = KeyPosition{ key: kpr.key_l, position: upper_offset };
+          let upper_kp = KeyPosition{ key: kpr.key_l, position: upper_offset + self.max_error };
+          let kp_corridor = Corridor{ key: kpr.key_l, lower_kp, upper_kp };
           match &self.upper_corridor {
             Some(corridor) => corridor.intersect(&kp_corridor, upper_pov),
             None => kp_corridor,
@@ -293,8 +301,8 @@ impl ModelBuilder for DoubleLinearGreedyCorridorBuilder {
           let new_buffer = self.generate_segment()?;
 
           // restart new segment
-          self.lower_pov = Some(KeyPosition{ key: kpr.key, position: kpr.offset });
-          self.upper_pov = Some(KeyPosition{ key: kpr.key, position: kpr.offset + kpr.length + self.max_error });
+          self.lower_pov = Some(KeyPosition{ key: kpr.key_l, position: kpr.offset });
+          self.upper_pov = Some(KeyPosition{ key: kpr.key_l, position: kpr.offset + kpr.length + self.max_error });
           self.lower_corridor = None;
           self.upper_corridor = None;
 
@@ -303,8 +311,8 @@ impl ModelBuilder for DoubleLinearGreedyCorridorBuilder {
       },
       None => {
         assert!(self.upper_pov.is_none());
-        self.lower_pov = Some(KeyPosition{ key: kpr.key, position: kpr.offset });
-        self.upper_pov = Some(KeyPosition{ key: kpr.key, position: kpr.offset + kpr.length + self.max_error });
+        self.lower_pov = Some(KeyPosition{ key: kpr.key_l, position: kpr.offset });
+        self.upper_pov = Some(KeyPosition{ key: kpr.key_l, position: kpr.offset + kpr.length + self.max_error });
         Ok(None)
       },
     }
@@ -357,6 +365,7 @@ impl DoubleLinearMultipleDrafter {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::model::KeyPositionCollection;
 
   fn test_same_model(model_1: &Box<dyn Model>, model_2: &Box<DoubleLinearModel>) {
     // test coverage
@@ -398,17 +407,18 @@ mod tests {
     Ok(())
   }
 
-  fn generate_test_kprs() -> [KeyPositionRange; 8] {
-    [
-      KeyPositionRange{ key: 0, offset: 0, length: 7},
-      KeyPositionRange{ key: 50, offset: 7, length: 3},
-      KeyPositionRange{ key: 100, offset: 10, length: 20},
-      KeyPositionRange{ key: 105, offset: 30, length: 20},
-      KeyPositionRange{ key: 110, offset: 50, length: 20},
-      KeyPositionRange{ key: 115, offset: 70, length: 20},
-      KeyPositionRange{ key: 120, offset: 90, length: 910},  // jump, should split here
-      KeyPositionRange{ key: 131, offset: 1000, length: 915},
-    ]
+  fn generate_test_kprs() -> Vec<KeyPositionRange> {
+    let mut kps = KeyPositionCollection::new();
+    kps.push(0, 0);
+    kps.push(50, 7);
+    kps.push(100, 10);
+    kps.push(105, 30);
+    kps.push(110, 50);
+    kps.push(115, 70);
+    kps.push(120, 90);  // jump, should split here
+    kps.push(131, 1000);
+    kps.set_position_range(0, 1915);
+    kps.range_iter().collect()
   }
 
   fn assert_none_buffer(buffer: MaybeKeyBuffer) -> MaybeKeyBuffer {

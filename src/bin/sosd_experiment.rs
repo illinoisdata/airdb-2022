@@ -11,6 +11,8 @@ use airindex::common::error::GResult;
 use airindex::db::key_rank::read_keyset;
 use airindex::db::key_rank::SOSDRankDB;
 use airindex::index::hierarchical::BalanceStackIndexBuilder;
+use airindex::index::hierarchical::BoundedTopStackIndexBuilder;
+use airindex::index::Index;
 use airindex::index::IndexBuilder;
 use airindex::io::profile::AffineStorageProfile;
 use airindex::io::profile::Bandwidth;
@@ -20,9 +22,11 @@ use airindex::io::storage::Adaptor;
 use airindex::io::storage::ExternalStorage;
 use airindex::io::storage::FileSystemAdaptor;
 use airindex::io::storage::MmapAdaptor;
-use airindex::meta;
 use airindex::meta::Context;
+use airindex::meta;
+use airindex::model::ModelDrafter;
 use airindex::model::linear::DoubleLinearMultipleDrafter;
+use airindex::model::step::StepMultipleDrafter;
 use airindex::store::array_store::ArrayStore;
 use airindex::store::key_position::KeyPositionCollection;
 
@@ -65,6 +69,9 @@ pub struct Cli {
   #[structopt(long)]
   keyset_path: String,
 
+  /// index type [dlst, st, btree]
+  #[structopt(long)]
+  index_type: String,
   /// manual storage profile's latency in nanoseconds (affine)
   #[structopt(long)]
   affine_latency_ns: Option<u64>,
@@ -78,6 +85,9 @@ pub struct Cli {
   /// disable cache to storage IO interface
   #[structopt(long)]
   no_cache: bool,
+  /// disable parallel index building
+  #[structopt(long)]
+  no_parallel: bool,
   /// number of queries to test
   #[structopt(long)]
   num_samples: Option<usize>,
@@ -134,15 +144,7 @@ impl Experiment {
     self.observe_kps(&data_kps, 10);
 
     // build index
-    let model_drafter = Box::new(DoubleLinearMultipleDrafter::exponentiation(32, 1_048_576, 1.5));
-    let index_builder = BalanceStackIndexBuilder::new(
-      self.context.storage.as_ref().unwrap(),
-      model_drafter,
-      profile.as_ref(),
-      args.db_path.clone(),
-    );
-    let index = index_builder.build_index(&data_kps)?;
-    println!("Built index at {}: {:#?}", args.db_path, index);
+    let index = self.build_index_from_kps(args, &data_kps, profile.as_ref())?;
     sosd_db.attach_index(index);
 
     // turn into serializable form
@@ -180,19 +182,6 @@ impl Experiment {
     Ok(SOSDRankDB::new(array_store))
   }
 
-  fn observe_kps(&self, kps: &KeyPositionCollection, num_print_kps: usize) {
-    println!("Head:");
-    for idx in 0..num_print_kps {
-      println!("\t{}: {:?}", idx, kps[idx]);
-    }
-    println!("Intermediate:");
-    let step = kps.len() / num_print_kps;
-    for idx in 0..num_print_kps {
-      println!("\t{}: {:?}", idx * step, kps[idx * step]);
-    }
-    println!("Length= {}, where last kp: {:?}", kps.len(), kps[kps.len() - 1]);
-  }
-
   fn load_profile(&self, args: &Cli) -> Box<dyn StorageProfile> {
     if args.affine_latency_ns.is_some() {
       assert!(args.affine_bandwidth_mbps.is_some());
@@ -211,6 +200,82 @@ impl Experiment {
     ))  // nfs simplified
   }
 
+  fn build_index_from_kps(&self, args: &Cli, data_kps: &KeyPositionCollection, profile: &dyn StorageProfile) -> GResult<Box<dyn Index>> {
+    let model_drafter = self.make_drafter(args);
+    let index_builder = self.make_index_builder(args, model_drafter, profile);
+    let index = index_builder.build_index(data_kps)?;
+    println!("Built index at {}: {:#?}", args.db_path, index);
+    Ok(index)
+  }
+
+  fn make_drafter(&self, args: &Cli) -> Box<dyn ModelDrafter> {
+    let model_drafter = match args.index_type.as_str() {
+      "dlst" => {
+        StepMultipleDrafter::exponentiation(32, 1_048_576, 1.5, 16)
+          .extend(DoubleLinearMultipleDrafter::exponentiation(32, 1_048_576, 1.5))
+      },
+      "st" => {
+        StepMultipleDrafter::exponentiation(32, 1_048_576, 1.5, 16)
+      },
+      "btree" => {
+        StepMultipleDrafter::exponentiation(4096, 4096, 1.5, 255)
+      },
+      _ => panic!("Invalid sosd dtype \"{}\"", args.sosd_dtype),
+    };
+
+    // serial or parallel drafting
+    let model_drafter = if args.no_parallel {
+      model_drafter.to_serial()
+    } else {
+      model_drafter.to_parallel()
+    };
+    Box::new(model_drafter)
+  }
+
+  fn make_index_builder<'a>(&'a self, args: &Cli, model_drafter: Box<dyn ModelDrafter>, profile: &'a (dyn StorageProfile + 'a)) -> Box<dyn IndexBuilder + 'a> {
+    match args.index_type.as_str() {
+      "dlst" => {
+        Box::new(BalanceStackIndexBuilder::new(
+          self.context.storage.as_ref().unwrap(),
+          model_drafter,
+          profile,
+          args.db_path.clone(),
+        ))
+      },
+      "st" => {
+        Box::new(BalanceStackIndexBuilder::new(
+          self.context.storage.as_ref().unwrap(),
+          model_drafter,
+          profile,
+          args.db_path.clone(),
+        ))
+      },
+      "btree" => {
+        Box::new(BoundedTopStackIndexBuilder::new(
+          self.context.storage.as_ref().unwrap(),
+          model_drafter,
+          profile,
+          4096,
+          args.db_path.clone(),
+        ))
+      },
+      _ => panic!("Invalid sosd dtype \"{}\"", args.sosd_dtype),
+    }
+  }
+
+  fn observe_kps(&self, kps: &KeyPositionCollection, num_print_kps: usize) {
+    println!("Head:");
+    for idx in 0..num_print_kps {
+      println!("\t{}: {:?}", idx, kps[idx]);
+    }
+    println!("Intermediate:");
+    let step = kps.len() / num_print_kps;
+    for idx in 0..num_print_kps {
+      println!("\t{}: {:?}", idx * step, kps[idx * step]);
+    }
+    println!("Length= {}, where last kp: {:?}", kps.len(), kps[kps.len() - 1]);
+  }
+
   // TODO: multiple time?
 
   pub fn benchmark(&self, args: &Cli) -> GResult<(Vec<u128>, Vec<usize>)> {
@@ -222,19 +287,19 @@ impl Experiment {
     };
 
     // start the clock and begin db/index reconstruction
+    log::debug!("starting the benchmark");
     let mut time_measures = Vec::new();
     let mut query_counts = Vec::new();
     let mut count_milestone = 1;
     let freq_mul: f64 = 1.1;
     let start_time = Instant::now();
     let sosd_db = self.reload()?;
-    for idx in 0..num_samples {
-      let test_kr = &test_keyset[idx];
+    log::debug!("reloaded rank db");
+    for (idx, test_kr) in test_keyset.iter().enumerate().take(num_samples) {
       let rcv_kr = sosd_db.rank_of(test_kr.key)?
         .unwrap_or_else(|| panic!("Existing key {} not found", test_kr.key));
-      assert_eq!(rcv_kr.key, test_kr.key);
-      assert_eq!(rcv_kr.rank, test_kr.rank);
-      if idx + 1 == count_milestone || idx + 1 == test_keyset.len() {
+      assert_eq!(rcv_kr, *test_kr, "Mismatch rank rcv: {:?}, actual: {:?}", rcv_kr, test_kr);
+      if idx + 1 == count_milestone || idx + 1 == num_samples {
         let time_elapsed = start_time.elapsed();
         time_measures.push(time_elapsed.as_nanos());
         query_counts.push(idx + 1);

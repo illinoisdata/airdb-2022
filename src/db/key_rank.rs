@@ -21,7 +21,7 @@ use crate::store::key_position::KeyPositionCollection;
 use crate::store::key_position::KeyT;
 
 
-#[derive(Debug)]
+#[derive(PartialEq, Debug)]
 pub struct KeyRank {
   pub key: KeyT,
   pub rank: usize,  // from 0 to n-1
@@ -57,7 +57,7 @@ impl SOSDRankDB {
       .expect("Index missing, trying to accessing empty data store")
       .predict(&key)?;
     let reader = self.array_store.read_array_within(kpr.offset, kpr.length)?;
-    log::debug!("received rank buffer ({} bytes)", kpr.length);
+    log::debug!("received rank buffer from {:?}", kpr);
     for (idx, (dbuffer, rank)) in reader.iter_with_rank().enumerate() {
       let current_key = self.deserialize_key(dbuffer);
       if current_key == key {
@@ -74,20 +74,37 @@ impl SOSDRankDB {
     let mut kps = KeyPositionCollection::new();
     let reader = self.array_store.read_array_all()?;
     let mut current_offset = 0;
-    let mut last_key = 0;
+    let mut last_key = None;
+    let mut duplicate_count = 0;
     for (dbuffer, _rank) in reader.iter_with_rank() {
       let current_key = self.deserialize_key(dbuffer);
-      if last_key == current_key {
-        continue
+      if last_key.is_some() && last_key.unwrap() == current_key {
+        duplicate_count += 1;
       } else {
-        assert!(last_key < current_key);
         kps.push(current_key, current_offset);  // TODO: overflow?
-        current_offset += self.array_store.data_size();
-        last_key = current_key
+        last_key = Some(current_key)
       }
+      current_offset += self.array_store.data_size();
     }
+    log::debug!("{} duplicated key pairs", duplicate_count);
     kps.set_position_range(0, current_offset);
     Ok(kps)
+  }
+
+  pub fn generate_keyset(&self, kps: &KeyPositionCollection, keyset_path: String, num_keyset: usize) -> GResult<()> {
+    let mut keyset_file = OpenOptions::new()
+      .create(true)
+      .write(true)
+      .truncate(true)
+      .open(keyset_path.as_str())?;
+    let mut rng = Pcg64::seed_from_u64(54613789);  // "random" seed via cat typing asdasd
+
+    for _ in 0..num_keyset {
+      let idx = rng.gen_range(0..kps.len());
+      let kp = &kps[idx];  // assume key-position is sorted by key
+      writeln!(&mut keyset_file, "{} {}", kp.key, kp.position / self.array_store.data_size())?;
+    }
+    Ok(())
   }
 
   fn deserialize_key(&self, dbuffer: &[u8]) -> KeyT {
@@ -122,22 +139,6 @@ impl SOSDRankDB {  // for Metaserde
       },
     })
   }
-}
-
-pub fn generate_keyset(kps: &KeyPositionCollection, keyset_path: String, num_keyset: usize) -> GResult<()> {
-  let mut keyset_file = OpenOptions::new()
-    .create(true)
-    .write(true)
-    .truncate(true)
-    .open(keyset_path.as_str())?;
-  let mut rng = Pcg64::seed_from_u64(54613789);  // "random" seed via cat typing asdasd
-
-  for _ in 0..num_keyset {
-    let rank = rng.gen_range(0..kps.len());
-    let kp = &kps[rank];  // assume key-position is sorted by key
-    writeln!(&mut keyset_file, "{} {}", kp.key, rank)?;
-  }
-  Ok(())
 }
 
 pub fn read_keyset(keyset_path: String) -> GResult<Vec<KeyRank>> {

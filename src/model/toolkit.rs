@@ -27,6 +27,11 @@ impl MultipleDrafter {
     self.drafters.push(drafter)
   }
 
+  pub fn extend(mut self, other: MultipleDrafter) -> Self {
+    self.drafters.extend(other.drafters);
+    self
+  }
+
   pub fn to_serial(mut self) -> MultipleDrafter {
     self.use_parallel = false;
     self
@@ -80,7 +85,9 @@ pub struct BuilderAsDrafter {
 
 impl std::fmt::Debug for BuilderAsDrafter {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    f.debug_struct("BuilderAsDrafter").finish()
+    f.debug_struct("BuilderAsDrafter")
+      .field("drafter", &(*self.builder_producer)())
+      .finish()
   }
 }
 
@@ -118,7 +125,8 @@ impl ModelDrafter for BuilderAsDrafter {
     let total_loads = [est_complexity_loads, model_loads].concat();
     let cost = profile.sequential_cost(&total_loads);
     log::info!(
-      "Drafted model: {} submodels, loads= {:?}, cost= {:?} (c/m: {:?}/{:?})",
+      "{:?}: {} submodels, loads= {:?}, cost= {:?} (c/m: {:?}/{:?})",
+      self,
       key_buffers.len(),
       total_loads,
       cost,

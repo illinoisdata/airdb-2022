@@ -4,7 +4,6 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::Read;
 use std::io::Write;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
@@ -58,22 +57,8 @@ impl FileSystemAdaptor {
   pub fn new<P: AsRef<Path>>(root_path: &P) -> FileSystemAdaptor {
     FileSystemAdaptor { root_path: root_path.as_ref().to_path_buf() }
   }
-}
 
-impl Adaptor for FileSystemAdaptor {
-  fn read_all(&mut self, path: &Path) -> GResult<Vec<u8>> {
-    let mut f = OpenOptions::new()
-        .read(true)
-        .open(self.root_path.join(path))?;
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf)?;
-    Ok(buf)
-  }
-
-  fn read_range(&mut self, path: &Path, range: &Range) -> GResult<Vec<u8>> {
-    let f = OpenOptions::new()
-        .read(true)
-        .open(self.root_path.join(path))?;
+  fn read_range_from_file(f: File, range: &Range) -> GResult<Vec<u8>> {
     let mut buf = vec![0u8; range.length];
 
     // File::read_at might return fewer bytes than requested (e.g. 2GB at a time)
@@ -84,6 +69,23 @@ impl Adaptor for FileSystemAdaptor {
       buf_offset += read_bytes;
     }
     Ok(buf)
+  }
+}
+
+impl Adaptor for FileSystemAdaptor {
+  fn read_all(&mut self, path: &Path) -> GResult<Vec<u8>> {
+    let f = OpenOptions::new()
+        .read(true)
+        .open(self.root_path.join(path))?;
+    let file_length = f.metadata()?.len();
+    FileSystemAdaptor::read_range_from_file(f, &Range { offset: 0, length: file_length as usize })
+  }
+
+  fn read_range(&mut self, path: &Path, range: &Range) -> GResult<Vec<u8>> {
+    let f = OpenOptions::new()
+        .read(true)
+        .open(self.root_path.join(path))?;
+    FileSystemAdaptor::read_range_from_file(f, range)
   }
 
   fn create(&mut self, path: &Path) -> GResult<()> {
@@ -109,13 +111,14 @@ pub struct MmapAdaptor {
 }
 
 fn new_mmap(path_buf: &Path) -> GResult<Mmap> {
-  log::debug!("Mmaping {:?}", path_buf);
   let file = File::open(path_buf)?;
-  Ok(unsafe {
+  let mmap = unsafe {
     MmapOptions::new()
       // .populate()
       .map(&file)?
-  })
+  };
+  log::debug!("Mmaped {:?}", path_buf);
+  Ok(mmap)
 }
 
 impl MmapAdaptor {
