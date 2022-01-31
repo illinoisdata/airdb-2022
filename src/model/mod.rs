@@ -31,6 +31,7 @@ pub trait ModelRecon: ModelReconMetaserde + Debug {
 pub enum ModelReconMeta {
   DoubleLinear { meta: linear::DoubleLinearModelReconMeta },
   Step,
+  Band,
 }
 
 pub trait ModelReconMetaserde {
@@ -42,6 +43,7 @@ impl ModelReconMeta {
     let store = match meta {
       ModelReconMeta::DoubleLinear { meta } => Box::new(linear::DoubleLinearModelRecon::from_meta(meta, ctx)?) as Box<dyn ModelRecon>,
       ModelReconMeta::Step => Box::new(step::StepModelRecon) as Box<dyn ModelRecon>,
+      ModelReconMeta::Band => Box::new(band::BandModelRecon) as Box<dyn ModelRecon>,
     };
     Ok(store)
   }
@@ -84,3 +86,4 @@ pub trait ModelDrafter: Sync + Debug {
 pub mod toolkit;
 pub mod linear;
 pub mod step;
+pub mod band;

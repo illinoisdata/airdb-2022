@@ -1,0 +1,586 @@
+use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
+use serde::{Serialize, Deserialize};
+use std::error::Error;
+use std::io;
+
+use crate::common::error::GResult;
+use crate::meta::Context;
+use crate::model::BuilderFinalReport;
+use crate::model::MaybeKeyBuffer;
+use crate::model::Model;
+use crate::model::ModelBuilder;
+use crate::model::ModelDrafter;
+use crate::model::ModelRecon;
+use crate::model::ModelReconMeta;
+use crate::model::ModelReconMetaserde;
+use crate::model::toolkit::BuilderAsDrafter;
+use crate::model::toolkit::MultipleDrafter;
+use crate::store::key_buffer::KeyBuffer;
+use crate::store::key_position::KeyPosition;
+use crate::store::key_position::KPDirection;
+use crate::store::key_position::KeyPositionRange;
+use crate::store::key_position::KeyT;
+use crate::store::key_position::POSITION_LENGTH;
+use crate::store::key_position::PositionT;
+
+
+/* Linear lower bound with max load width */
+
+#[derive(Debug)]
+pub struct BandModel {
+  kp_1: KPDirection,
+  kp_2: KPDirection,
+  width: PositionT,  // max load, position
+}
+
+impl BandModel {
+  fn width(&self) -> PositionT {
+    self.width
+  }
+
+  fn pick_narrower(band: Option<BandModel>, other: Option<BandModel>) -> Option<BandModel> {
+    match band {
+      Some(band_1) => match other {
+        Some(band_2) => Some(if band_1.width() <= band_2.width() { band_1 } else { band_2 }),
+        None => Some(band_1),
+      }
+      None => other
+    }
+  }
+}
+
+impl Model for BandModel {
+  fn predict(&self, key: &KeyT) -> KeyPositionRange {
+    let left_offset = std::cmp::max(self.kp_1.interpolate_with(&self.kp_2, key), 0) as PositionT;
+    let right_offset = left_offset + self.width;
+    KeyPositionRange::from_bound(*key, *key, left_offset, right_offset)
+  }
+}
+
+#[derive(Debug)]
+struct AnchoredBand {
+  band: BandModel,
+  anchor_key: KeyT,
+}
+
+
+/* Linear with max load width on both sides */
+
+#[derive(Debug)]
+struct DoubleBandModel {
+  kp_1: KPDirection,
+  kp_2: KPDirection,
+  width_under: PositionT,  // max load
+  width_over: PositionT,  // min load
+}
+
+impl DoubleBandModel {
+  fn new(kp_1: &KeyPosition, kp_2: &KeyPosition) -> DoubleBandModel {
+    DoubleBandModel {
+      kp_1: KPDirection::from_kp(kp_1),
+      kp_2: KPDirection::from_kp(kp_2),
+      width_under: 0,
+      width_over: 0,
+    }
+  } 
+
+  fn update(&mut self, kp: &KeyPosition) {
+    // shift kps down every update?
+    let predict_offset = self.kp_1.interpolate_with(&self.kp_2, &kp.key);
+    let deviation = kp.position as i64 - predict_offset;
+    if deviation > 0 {
+      // underestimate
+      self.width_under = std::cmp::max(self.width_under, deviation as PositionT);
+    } else {
+      // overestimate
+      self.width_over = std::cmp::max(self.width_over, (-deviation) as PositionT);
+    }
+  }
+
+  fn into_band(self) -> BandModel {
+    // shift anchor points down and adjust the width
+    BandModel {
+      kp_1: self.kp_1.subtract_y(self.width_over),
+      kp_2: self.kp_2.subtract_y(self.width_over),
+      width: self.width_under + self.width_over,
+    }
+  }
+}
+
+
+/* Convex hull capturing all given points */
+
+// check whether the angle at 2 on [1 --> 2 --> 3] is convex
+fn is_convex(kp_1: &KeyPosition, kp_2: &KeyPosition, kp_3: &KeyPosition) -> bool {
+  KPDirection::from_pair(kp_1, kp_2).is_lower_than(&KPDirection::from_pair(kp_2, kp_3))
+}
+
+fn is_concave(kp_1: &KeyPosition, kp_2: &KeyPosition, kp_3: &KeyPosition) -> bool {
+  KPDirection::from_pair(kp_2, kp_3).is_lower_than(&KPDirection::from_pair(kp_1, kp_2))
+}
+
+// create band line (from pairs in line_kps) and test its width on covered points (point_kps)
+fn band_from_window(line_kps: &[KeyPosition], point_kps: &[KeyPosition]) -> Option<BandModel> {
+  if line_kps.len() <= 1 || point_kps.is_empty() {
+    None
+  } else {
+    // assert!(line_kps.len() >= 2, "Require at least two anchors to make a band");
+    // assert!(point_kps.len() >= 1, "Require at least one anchor to evaluate the band(s)");
+    (0..line_kps.len() - 1).map(|idx| {
+      let mut double_band = DoubleBandModel::new(&line_kps[idx], &line_kps[idx+1]);
+      for kp in point_kps {  // TODO: if slow, consider sliding window in reverse
+        double_band.update(kp);
+      }
+      double_band.into_band()
+    }).min_by_key(|band| band.width())
+    // let mut double_band = DoubleBandModel::new(&line_kps[0], &line_kps[1]);
+    // for kp in point_kps {  // TODO: if slow, consider sliding window in reverse
+    //   double_band.update(kp);
+    // }
+    // Some(double_band.into_band())
+  }
+}
+
+#[derive(Debug)]
+struct ConvexHull {
+  lower_kps: Vec<KeyPosition>,  // convex lower curve
+  upper_kps: Vec<KeyPosition>,  // concave upper curve
+}
+
+impl ConvexHull {
+  pub fn new() -> ConvexHull {
+    ConvexHull {
+      lower_kps: Vec::new(),
+      upper_kps: Vec::new(),
+    }
+  }
+
+  // create linear model 
+  pub fn make_narrowest_band(&self) -> Option<AnchoredBand> {
+    let lower_band = band_from_window(&self.lower_kps, &self.upper_kps);
+    let upper_band = band_from_window(&self.upper_kps, &self.lower_kps);
+    BandModel::pick_narrower(lower_band, upper_band).map(|band| AnchoredBand { 
+      band,
+      anchor_key: {
+        assert_eq!(self.lower_kps[0], self.upper_kps[0], "Convex hull should align on its left end");
+        self.lower_kps[0].key
+      },
+    })
+  }
+
+  fn push_right_lower(&mut self, kp: KeyPosition) {
+    // pop violating segment from back to front
+    if !self.lower_kps.is_empty() {
+      assert!(self.lower_kps[self.lower_kps.len() - 1].key <= kp.key);
+    }
+    while self.lower_kps.len() >= 2 {
+      let n = self.lower_kps.len();
+      if !is_convex(&self.lower_kps[n - 2], &self.lower_kps[n - 1], &kp) {
+        self.lower_kps.pop();
+      } else {
+        break;
+      }
+    }
+    self.lower_kps.push(kp);
+  }
+
+  fn push_right_upper(&mut self, kp: KeyPosition) {
+    // pop violating segment from back to front
+    if !self.upper_kps.is_empty() {
+      assert!(self.upper_kps[self.upper_kps.len() - 1].key <= kp.key);
+    }
+    while self.upper_kps.len() >= 2 {
+      let n = self.upper_kps.len();
+      if !is_concave(&self.upper_kps[n - 2], &self.upper_kps[n - 1], &kp) {
+        self.upper_kps.pop();
+      } else {
+        break;
+      }
+    }
+    self.upper_kps.push(kp);
+  }
+}
+
+
+/* Serialization */
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BandModelRecon;
+
+impl BandModelRecon {
+  fn new() -> BandModelRecon {
+    BandModelRecon
+  }
+
+  fn sketch(&mut self, bm: &BandModel) -> io::Result<Vec<u8>> {
+    // turn the model into a buffer
+    let mut model_buffer = vec![];
+    model_buffer.write_i64::<BigEndian>(bm.kp_1.x)?;
+    model_buffer.write_i64::<BigEndian>(bm.kp_1.y)?;
+    model_buffer.write_i64::<BigEndian>(bm.kp_2.x)?;
+    model_buffer.write_i64::<BigEndian>(bm.kp_2.y)?;
+    model_buffer.write_uint::<BigEndian>(bm.width as u64, POSITION_LENGTH)?;
+    Ok(model_buffer)  // expect 5 * 8 = 40 bytes
+  }
+
+  fn reconstruct_raw(&self, buffer: &[u8]) -> GResult<BandModel> {
+    let mut model_buffer = io::Cursor::new(buffer);
+    Ok(BandModel {
+      kp_1: KPDirection {
+        x: model_buffer.read_i64::<BigEndian>()?,
+        y: model_buffer.read_i64::<BigEndian>()?,
+      },
+      kp_2: KPDirection {
+        x: model_buffer.read_i64::<BigEndian>()?,
+        y: model_buffer.read_i64::<BigEndian>()?,
+      },
+      width: model_buffer.read_uint::<BigEndian>(POSITION_LENGTH)? as PositionT,
+    })
+  }
+}
+
+impl ModelRecon for BandModelRecon {
+  fn reconstruct(&self, buffer: &[u8]) -> Result<Box<dyn Model>, Box<dyn Error>> {
+    let model = self.reconstruct_raw(buffer)?;
+    Ok(Box::new(model))
+  }
+}
+
+impl ModelReconMetaserde for BandModelRecon {  // for Metaserde
+  fn to_meta(&self, _ctx: &mut Context) -> GResult<ModelReconMeta> {
+    Ok(ModelReconMeta::Band)
+  }
+}
+
+
+/* Builder */
+
+pub struct BandConvexHullGreedyBuilder {
+  max_load: PositionT,
+  max_load_observed: PositionT,
+  serde: BandModelRecon,
+  hull: ConvexHull,
+  feasible_band: Option<AnchoredBand>,
+}
+
+impl std::fmt::Debug for BandConvexHullGreedyBuilder {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("BandConvexHullGB")
+      .field("max_load", &self.max_load)
+      .finish()
+  }
+}
+
+impl BandConvexHullGreedyBuilder {
+  pub fn new(max_load: PositionT) -> BandConvexHullGreedyBuilder {
+    BandConvexHullGreedyBuilder {
+      max_load,
+      max_load_observed: 0,
+      serde: BandModelRecon::new(),
+      hull: ConvexHull::new(),
+      feasible_band: None,
+    }
+  }
+
+  fn push_to_hull(&mut self, kpr: &KeyPositionRange) {
+    self.hull.push_right_lower(KeyPosition { key: kpr.key_l, position: kpr.offset });
+    self.hull.push_right_lower(KeyPosition { key: kpr.key_r, position: kpr.offset });
+    self.hull.push_right_lower(KeyPosition { key: kpr.key_r, position: kpr.offset + kpr.length });
+    self.hull.push_right_upper(KeyPosition { key: kpr.key_l, position: kpr.offset });
+    self.hull.push_right_upper(KeyPosition { key: kpr.key_l, position: kpr.offset + kpr.length });
+    self.hull.push_right_upper(KeyPosition { key: kpr.key_r, position: kpr.offset + kpr.length });
+  }
+
+  fn maybe_readjust(&mut self, bm: &BandModel) {
+    if self.max_load_observed < bm.width() {
+      // log::info!("Adjusting max_load to {}", bm.width());
+      // log::info!("Due to {:?}", bm);
+      // log::info!("Hull {:#?}", self.hull);
+      // panic!("break");
+      self.max_load_observed = bm.width();
+    }
+  }
+
+  fn start_hull_with(&mut self, kpr: &KeyPositionRange) {
+    // log::info!("Hull size at full {} / {}", self.hull.lower_kps.len(), self.hull.upper_kps.len());
+    self.hull = ConvexHull::new();
+    self.push_to_hull(kpr);
+    let new_band = self.hull.make_narrowest_band()
+      .expect("Convex hull should produce a band after adding a kpr"); 
+    // self.maybe_readjust(&new_band);
+    self.feasible_band = Some(new_band);
+  }
+
+  fn consume_produce_feasible(&mut self, kpr: &KeyPositionRange) -> Option<AnchoredBand> {
+    // try adding points to convex hull and get a band model
+    self.push_to_hull(kpr);
+    let current_band = self.hull.make_narrowest_band()
+      .expect("Convex hull should produce a band after adding a kpr");
+
+    // check whether hull is full
+    if current_band.band.width() > self.max_load {
+      match self.feasible_band.take() {
+        Some(the_feasible_band) => {
+          // adding this kpr breaks the hull capacity
+          // repack kpr to the new hull and ship previously feasible band
+          self.start_hull_with(kpr);
+          Some(the_feasible_band)
+        },
+        None => {
+          // this hapeens when the only kpr is too large to fit in max_load
+          // increasing the max load for future insert
+          // self.maybe_readjust(&current_band);
+          self.feasible_band = Some(current_band);
+          None  // not writing this yet...
+        }
+      }
+    } else {
+      self.feasible_band = Some(current_band);
+      None
+    }
+  }
+
+  fn generate_segment(&mut self, band: Option<AnchoredBand>) -> GResult<MaybeKeyBuffer> {
+    match band {
+      Some(band_to_write) => {
+        self.maybe_readjust(&band_to_write.band);
+        let band_buffer = self.serde.sketch(&band_to_write.band)?;
+        Ok(Some(KeyBuffer{ key: band_to_write.anchor_key, buffer: band_buffer }))
+      },
+      None => Ok(None),
+    }
+  }
+}
+
+impl ModelBuilder for BandConvexHullGreedyBuilder {
+  fn consume(&mut self, kpr: &KeyPositionRange) -> GResult<MaybeKeyBuffer> {
+    let band = self.consume_produce_feasible(kpr);
+    self.generate_segment(band)
+  }
+
+  fn finalize(mut self: Box<Self>) -> GResult<BuilderFinalReport> {
+    // make last band if needed
+    let band = self.hull.make_narrowest_band();
+    let maybe_last_kb = self.generate_segment(band)?;
+    
+    Ok(BuilderFinalReport {
+      maybe_model_kb: maybe_last_kb,
+      serde: Box::new(self.serde),
+      model_loads: vec![self.max_load],  // TODO: SWTICH BACK
+      // model_loads: vec![self.max_load_observed],
+    })
+  }
+}
+
+impl BandConvexHullGreedyBuilder {
+  fn drafter(max_load: usize) -> Box<dyn ModelDrafter> {
+    let bm_producer = Box::new(
+      move || {
+        Box::new(BandConvexHullGreedyBuilder::new(max_load)) as Box<dyn ModelBuilder>
+      });
+    Box::new(BuilderAsDrafter::wrap(bm_producer))
+  }
+}
+
+
+/* Drafter */
+
+pub struct BandMultipleDrafter;
+
+impl BandMultipleDrafter {
+  pub fn exponentiation(low_load: PositionT, high_load: PositionT, exponent: f64) -> MultipleDrafter {
+    let mut bm_drafters = Vec::new();
+    let mut current_load = low_load;
+    while current_load < high_load {
+      bm_drafters.push(BandConvexHullGreedyBuilder::drafter(current_load));
+      current_load = ((current_load as f64) * exponent) as PositionT;
+    }
+    bm_drafters.push(BandConvexHullGreedyBuilder::drafter(high_load));
+    MultipleDrafter::from(bm_drafters)
+  }
+}
+
+
+/* Tests */
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn test_same_model(model_1: &BandModel, model_2: &BandModel) {
+    assert_eq!(model_1.kp_1, model_2.kp_1);
+    assert_eq!(model_1.kp_2, model_2.kp_2);
+    assert_eq!(model_1.width, model_2.width);
+  }
+  
+  #[test]
+  fn serde_test() -> GResult<()> {
+    let mut bm_serde = BandModelRecon::new();
+    let bm = Box::new(BandModel {
+      kp_1: KPDirection { x: 0, y: 0 },
+      kp_2: KPDirection { x: 105, y: 30 },
+      width: 123,
+    });
+
+    // sketch this model
+    let bm_buffer = bm_serde.sketch(&bm)?;
+    assert!(bm_buffer.len() > 0);
+
+    // reconstruct
+    let bm_recon = bm_serde.reconstruct_raw(&bm_buffer)?;
+    test_same_model(&bm_recon, &bm);
+
+    Ok(())
+  }
+
+  fn test_same_model_box(model_1: &Box<dyn Model>, model_2: &Box<BandModel>, key_left: KeyT, key_right: KeyT) {
+    for test_key in key_left..key_right {
+      assert_eq!(
+        model_1.predict(&test_key),
+        model_2.predict(&test_key),
+        "Models predict differently {:#?} <--> {:#?}",
+        model_1,
+        model_2,
+      ); 
+    }
+  }
+
+  fn generate_test_kprs() -> [KeyPositionRange; 8] {
+    [
+      KeyPositionRange{ key_l: 0, key_r: 0, offset: 0, length: 7},  // 0
+      KeyPositionRange{ key_l: 50, key_r: 50, offset: 7, length: 3},  // 1
+      KeyPositionRange{ key_l: 100, key_r: 100, offset: 10, length: 20},  // 2
+      KeyPositionRange{ key_l: 105, key_r: 105, offset: 30, length: 20},  // 3
+      KeyPositionRange{ key_l: 110, key_r: 110, offset: 50, length: 20},  // 4
+      KeyPositionRange{ key_l: 115, key_r: 115, offset: 70, length: 20},  // 5
+      KeyPositionRange{ key_l: 120, key_r: 120, offset: 90, length: 910},  // 6: jump, should split here
+      KeyPositionRange{ key_l: 131, key_r: 131, offset: 1000, length: 915},  // 7
+    ]
+  }
+
+  fn assert_none_buffer(buffer: MaybeKeyBuffer) -> MaybeKeyBuffer {
+    assert!(buffer.is_none());
+    None
+  }
+
+  fn assert_some_buffer(buffer: MaybeKeyBuffer) -> Vec<u8> {
+    assert!(buffer.is_some());
+    buffer.unwrap().buffer
+  }
+  
+  #[test]
+  fn greedy_test() -> GResult<()> {
+    let kprs = generate_test_kprs();
+    let mut bm_builder = Box::new(BandConvexHullGreedyBuilder::new(20));
+
+    // start adding points
+    let _model_kb_0 = assert_none_buffer(bm_builder.consume(&kprs[0])?);
+    let _model_kb_1 = assert_none_buffer(bm_builder.consume(&kprs[1])?);
+    let _model_kb_2 = assert_none_buffer(bm_builder.consume(&kprs[2])?);
+    let model_kb_3 = assert_some_buffer(bm_builder.consume(&kprs[3])?);
+    let _model_kb_4 = assert_none_buffer(bm_builder.consume(&kprs[4])?);
+    let _model_kb_5 = assert_none_buffer(bm_builder.consume(&kprs[5])?);
+    let model_kb_6 = assert_some_buffer(bm_builder.consume(&kprs[6])?);
+    let model_kb_7 = assert_some_buffer(bm_builder.consume(&kprs[7])?);
+
+    // finalize the builder
+    let BuilderFinalReport {
+      maybe_model_kb: last_buffer,
+      serde: bm_serde,
+      model_loads: bm_loads,
+    } = bm_builder.finalize()?;
+    let model_kb_8 = assert_some_buffer(last_buffer);
+    assert_eq!(bm_loads, vec![20]);
+
+    // check buffers
+    test_same_model_box(
+      &bm_serde.reconstruct(&model_kb_3)?,
+      &Box::new(BandModel {
+        kp_1: KPDirection { x: 0, y: 0 },
+        kp_2: KPDirection { x: 100, y: 10 },
+        width: 20,
+      }),
+      0,
+      101,
+    );
+    test_same_model_box(
+      &bm_serde.reconstruct(&model_kb_6)?,
+      &Box::new(BandModel {
+        kp_1: KPDirection { x: 105, y: 30 },
+        kp_2: KPDirection { x: 115, y: 70 },
+        width: 20,
+      }),
+      105,
+      116,
+    );
+    test_same_model_box(
+      &bm_serde.reconstruct(&model_kb_7)?,
+      &Box::new(BandModel {
+        kp_1: KPDirection { x: 120, y: 90 },
+        kp_2: KPDirection { x: 120, y: 1000 },
+        width: 910,
+      }),
+      120,
+      121,
+    );
+    test_same_model_box(
+      &bm_serde.reconstruct(&model_kb_8)?,
+      &Box::new(BandModel {
+        kp_1: KPDirection { x: 131, y: 1000 },
+        kp_2: KPDirection { x: 131, y: 1915 },
+        width: 915,
+      }),
+      121,
+      132,
+    );
+    Ok(())
+  }
+  
+  #[test]
+  fn greedy_with_error_test() -> GResult<()> {
+    let kprs = generate_test_kprs();
+    let mut bm_builder = Box::new(BandConvexHullGreedyBuilder::new(1500));
+
+    // start adding points
+    let _model_kb_0 = assert_none_buffer(bm_builder.consume(&kprs[0])?);
+    let _model_kb_1 = assert_none_buffer(bm_builder.consume(&kprs[1])?);
+    let _model_kb_2 = assert_none_buffer(bm_builder.consume(&kprs[2])?);
+    let _model_kb_3 = assert_none_buffer(bm_builder.consume(&kprs[3])?);
+    let _model_kb_4 = assert_none_buffer(bm_builder.consume(&kprs[4])?);
+    let _model_kb_5 = assert_none_buffer(bm_builder.consume(&kprs[5])?);
+    let _model_kb_6 = assert_none_buffer(bm_builder.consume(&kprs[6])?);
+    let model_kb_7 = assert_some_buffer(bm_builder.consume(&kprs[7])?);
+
+    // finalize the builder
+    let BuilderFinalReport {
+      maybe_model_kb: last_buffer,
+      serde: bm_serde,
+      model_loads: bm_loads,
+    } = bm_builder.finalize()?;
+    let model_kb_8 = assert_some_buffer(last_buffer);
+    assert_eq!(bm_loads, vec![1500]);
+
+    // check buffers
+    test_same_model_box(
+      &bm_serde.reconstruct(&model_kb_7)?,
+      &Box::new(BandModel {
+        kp_1: KPDirection { x: 100, y: 10 },
+        kp_2: KPDirection { x: 120, y: 90 },
+        width: 910,
+      }),
+      0,
+      121,
+    );
+    test_same_model_box(
+      &bm_serde.reconstruct(&model_kb_8)?,
+      &Box::new(BandModel {
+        kp_1: KPDirection { x: 131, y: 1000 },
+        kp_2: KPDirection { x: 131, y: 1915 },
+        width: 915,
+      }),
+      131,
+      132,
+    );
+    Ok(())
+  }
+}

@@ -287,7 +287,9 @@ mod tests {
       assert_eq!(
         model_1.predict(&test_key),
         model_2.predict(&test_key),
-        "Models predict differently"
+        "Models predict differently {:#?} <--> {:#?}",
+        model_1,
+        model_2,
       ); 
     }
   }
@@ -409,7 +411,7 @@ mod tests {
         anchors: vec![
           KeyPosition { key: 120, position: 90 },
           KeyPosition { key: 131, position: 1000 },
-          KeyPosition { key: u64::MAX, position: 1000 },
+          KeyPosition { key: u64::MAX, position: 1915 },
         ],
       }),
       120,

@@ -132,7 +132,6 @@ impl ModelRecon for DoubleLinearModelRecon {
   }
 }
 
-
 pub type DoubleLinearModelReconMeta = DoubleLinearModelRecon;
 
 impl ModelReconMetaserde for DoubleLinearModelRecon {  // for Metaserde

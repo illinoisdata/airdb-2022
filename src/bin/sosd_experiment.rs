@@ -25,6 +25,7 @@ use airindex::io::storage::MmapAdaptor;
 use airindex::meta::Context;
 use airindex::meta;
 use airindex::model::ModelDrafter;
+use airindex::model::band::BandMultipleDrafter;
 use airindex::model::linear::DoubleLinearMultipleDrafter;
 use airindex::model::step::StepMultipleDrafter;
 use airindex::store::array_store::ArrayStore;
@@ -211,11 +212,15 @@ impl Experiment {
   fn make_drafter(&self, args: &Cli) -> Box<dyn ModelDrafter> {
     let model_drafter = match args.index_type.as_str() {
       "dlst" => {
-        StepMultipleDrafter::exponentiation(32, 1_048_576, 1.5, 16)
-          .extend(DoubleLinearMultipleDrafter::exponentiation(32, 1_048_576, 1.5))
+        StepMultipleDrafter::exponentiation(32, 1_048_576, 2.0, 16)
+          .extend(DoubleLinearMultipleDrafter::exponentiation(32, 1_048_576, 2.0))
       },
       "st" => {
-        StepMultipleDrafter::exponentiation(32, 1_048_576, 1.5, 16)
+        StepMultipleDrafter::exponentiation(32, 1_048_576, 2.0, 16)
+      },
+      "stb" => {
+        StepMultipleDrafter::exponentiation(32, 1_048_576, 2.0, 16)
+          .extend(BandMultipleDrafter::exponentiation(32, 65_536, 2.0))
       },
       "btree" => {
         StepMultipleDrafter::exponentiation(4096, 4096, 1.5, 255)
@@ -234,15 +239,7 @@ impl Experiment {
 
   fn make_index_builder<'a>(&'a self, args: &Cli, model_drafter: Box<dyn ModelDrafter>, profile: &'a (dyn StorageProfile + 'a)) -> Box<dyn IndexBuilder + 'a> {
     match args.index_type.as_str() {
-      "dlst" => {
-        Box::new(BalanceStackIndexBuilder::new(
-          self.context.storage.as_ref().unwrap(),
-          model_drafter,
-          profile,
-          args.db_path.clone(),
-        ))
-      },
-      "st" => {
+      "dlst" | "st" | "stb" => {
         Box::new(BalanceStackIndexBuilder::new(
           self.context.storage.as_ref().unwrap(),
           model_drafter,
@@ -259,7 +256,7 @@ impl Experiment {
           args.db_path.clone(),
         ))
       },
-      _ => panic!("Invalid sosd dtype \"{}\"", args.sosd_dtype),
+      _ => panic!("Invalid index type \"{}\"", args.index_type),
     }
   }
 

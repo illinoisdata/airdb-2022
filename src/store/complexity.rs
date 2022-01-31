@@ -40,7 +40,7 @@ impl StepComplexity {
       // compute cost (fetch whole top layer and loads on intermediate layers)
       let loads = [vec![current_size], vec![cratio as usize; num_layers]].concat();
       let cost = profile.sequential_cost(&loads);
-      log::debug!("L= {}: cratio= {}  -->  loads= {:?}, cost= {:?}  <==>  best_cost= {:?}", num_layers, cratio, loads, cost, best_cost);
+      // log::debug!("L= {}: cratio= {}  -->  loads= {:?}, cost= {:?}  <==>  best_cost= {:?}", num_layers, cratio, loads, cost, best_cost);
       if best_cost > cost {
         best_loads = loads;
         best_cost = cmp::min(best_cost, cost);

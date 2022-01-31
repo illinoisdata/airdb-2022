@@ -19,7 +19,8 @@ DB_ROOT=$3
 INDEX_TYPE=$4
 ACTION=$5
 RESET_SCRIPT=$6
-PROFILE="--affine-latency-ns 108000000 --affine-bandwidth-mbps 104.0"  # nfs
+PROFILE="--affine-latency-ns 10000000 --affine-bandwidth-mbps 16.0"  # nfs
+# PROFILE="--affine-latency-ns 108000000 --affine-bandwidth-mbps 104.0"  # nfs2
 # PROFILE="--affine-latency-ns 22000 --affine-bandwidth-mbps 2500.0"  # ssd
 echo "Using BLOB_ROOT=${BLOB_ROOT}, KEYSET_ROOT=${KEYSET_ROOT}, DB_ROOT=${DB_ROOT}, INDEX_TYPE=${INDEX_TYPE}, ACTION=${ACTION}, RESET_SCRIPT=${RESET_SCRIPT}"
 if [[ $ACTION != "build" && $ACTION != "benchmark" ]]

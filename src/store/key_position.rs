@@ -17,21 +17,43 @@ pub struct KeyPosition {
   pub position: PositionT,
 }
 
-struct KPDirection {
-  x: f64,
-  y: f64,
+#[derive(PartialEq, Debug)]
+pub struct KPDirection {
+  pub x: i64,
+  pub y: i64,
 }
 
 impl KPDirection {
-  pub fn new(kp_1: &KeyPosition, kp_2: &KeyPosition) -> KPDirection {
+  pub fn from_pair(kp_1: &KeyPosition, kp_2: &KeyPosition) -> KPDirection {
     KPDirection {
-      x: kp_2.key as f64 - kp_1.key as f64,
-      y: kp_2.position as f64 - kp_1.position as f64,
+      x: kp_2.key as i64 - kp_1.key as i64,
+      y: kp_2.position as i64 - kp_1.position as i64,
     }
+  }
+
+  pub fn from_kp(kp: &KeyPosition) -> KPDirection {
+    KPDirection {
+      x: kp.key as i64,
+      y: kp.position as i64,
+    }
+  }
+
+  pub fn subtract_y(mut self, position: PositionT) -> KPDirection {
+    self.y -= position as i64;
+    self
   }
 
   pub fn is_lower_than(&self, other: &KPDirection) -> bool {
     self.y * other.x < self.x * other.y
+  }
+
+  pub fn interpolate_with(&self, other: &KPDirection, key: &KeyT) -> i64 {
+    if self.x == other.x {
+      self.y
+    } else {
+      // (self.y + ((*key as f64 - self.x) / (other.x - self.x)) * (other.y - self.y)).floor() as PositionT
+      self.y + ((*key as i64 - self.x) * (other.y - self.y) / (other.x - self.x))
+    }
   }
 }
 
@@ -49,7 +71,7 @@ impl KeyPosition {
   }
 
   pub fn is_lower_slope_than(&self, other: &KeyPosition, pov: &KeyPosition) -> bool {
-    KPDirection::new(self, pov).is_lower_than(&KPDirection::new(other, pov))
+    KPDirection::from_pair(self, pov).is_lower_than(&KPDirection::from_pair(other, pov))
   }
 }
 
