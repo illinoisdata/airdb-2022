@@ -212,15 +212,15 @@ impl Experiment {
   fn make_drafter(&self, args: &Cli) -> Box<dyn ModelDrafter> {
     let model_drafter = match args.index_type.as_str() {
       "dlst" => {
-        StepMultipleDrafter::exponentiation(32, 1_048_576, 2.0, 16)
-          .extend(DoubleLinearMultipleDrafter::exponentiation(32, 1_048_576, 2.0))
+        StepMultipleDrafter::exponentiation(64, 1_048_576, 2.0, 16)
+          .extend(DoubleLinearMultipleDrafter::exponentiation(64, 1_048_576, 2.0))
       },
       "st" => {
-        StepMultipleDrafter::exponentiation(32, 1_048_576, 2.0, 16)
+        StepMultipleDrafter::exponentiation(64, 1_048_576, 2.0, 16)
       },
       "stb" => {
-        StepMultipleDrafter::exponentiation(32, 1_048_576, 2.0, 16)
-          .extend(BandMultipleDrafter::exponentiation(32, 65_536, 2.0))
+        StepMultipleDrafter::exponentiation(64, 1_048_576, 2.0, 16)
+          .extend(BandMultipleDrafter::exponentiation(64, 1_048_576, 2.0))
       },
       "btree" => {
         StepMultipleDrafter::exponentiation(4096, 4096, 1.5, 255)

@@ -1,6 +1,5 @@
 use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
 use serde::{Serialize, Deserialize};
-use std::error::Error;
 use std::cmp;
 use std::io;
 
@@ -104,7 +103,7 @@ impl DoubleLinearModelRecon {
 }
 
 impl ModelRecon for DoubleLinearModelRecon {
-  fn reconstruct(&self, buffer: &[u8]) -> Result<Box<dyn Model>, Box<dyn Error>> {
+  fn reconstruct(&self, buffer: &[u8]) -> GResult<Box<dyn Model>> {
     let mut model_buffer = io::Cursor::new(buffer);
     let model = DoubleLinearModel {
       lower_line: LinearModel {
@@ -431,7 +430,7 @@ mod tests {
   }
   
   #[test]
-  fn greedy_corridor_test() -> Result<(), Box<dyn Error>> {
+  fn greedy_corridor_test() -> GResult<()> {
     let kprs = generate_test_kprs();
     let mut dlm_builder = Box::new(DoubleLinearGreedyCorridorBuilder::new(0));
 
@@ -489,7 +488,7 @@ mod tests {
   }
   
   #[test]
-  fn greedy_corridor_with_error_test() -> Result<(), Box<dyn Error>> {
+  fn greedy_corridor_with_error_test() -> GResult<()> {
     let kprs = generate_test_kprs();
     let mut dlm_builder = Box::new(DoubleLinearGreedyCorridorBuilder::new(100));
 

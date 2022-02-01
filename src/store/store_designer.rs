@@ -40,9 +40,9 @@ impl StoreDesigner {
 
   fn data_size_if_sized(key_buffers: &[KeyBuffer]) -> Option<usize> {
     assert!(!key_buffers.is_empty(), "Expect non-empty key-buffers");
-    let data_size = key_buffers[0].buffer.len();
+    let data_size = key_buffers[0].serialized_size();
     for key_buffer in key_buffers {
-      if key_buffer.buffer.len() != data_size {
+      if key_buffer.serialized_size() != data_size {
         return None;
       }
     }

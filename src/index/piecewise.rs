@@ -35,6 +35,8 @@ impl fmt::Display for OutofCoverageError {
 }
 
 impl Error for OutofCoverageError {}
+unsafe impl Send for OutofCoverageError {}
+unsafe impl Sync for OutofCoverageError {}
 
 #[derive(Debug)]
 pub struct PiecewiseIndex {
@@ -57,7 +59,7 @@ impl PiecewiseIndex {
     // // not assuming ordered by key, but more deserialization
     // let last_kb = reader.iter().filter(|kb| kb.key <= *key).max_by_key(|kb| kb.key);
 
-    last_kb.ok_or_else(|| Box::new(OutofCoverageError) as Box<dyn Error>)
+    last_kb.ok_or_else(|| Box::new(OutofCoverageError) as Box<dyn Error + Send + Sync>)
   }
 }
 

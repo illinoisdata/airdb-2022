@@ -17,7 +17,6 @@ use crate::store::DataStoreReaderIter;
 use crate::store::DataStoreWriter;
 use crate::store::key_buffer::KeyBuffer;
 use crate::store::key_position::KeyPositionCollection;
-use crate::store::key_position::KEY_LENGTH;
 use crate::store::key_position::PositionT;
 
 
@@ -47,7 +46,7 @@ impl ArrayStore {
       storage: Rc::clone(storage),
       state: ArrayStoreState {
         array_path,
-        data_size: data_size + KEY_LENGTH,  // KeyBuffer also serialize the key
+        data_size,
         offset: 0,
         length: 0,
       },
@@ -311,7 +310,7 @@ mod tests {
     let temp_dir = TempDir::new()?;
     let mfsa = MmapAdaptor::new(&temp_dir);
     let es = Rc::new(RefCell::new(ExternalStorage::new(Box::new(mfsa))));
-    let mut arrstore = ArrayStore::new_sized(&es, PathBuf::from("test_arrstore"), 4);
+    let mut arrstore = ArrayStore::new_sized(&es, PathBuf::from("test_arrstore"), 12);
 
     // write but never commit
     let _kps = {

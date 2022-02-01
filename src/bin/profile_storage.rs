@@ -64,7 +64,7 @@ pub struct ProfileResult<'a> {
   time_measures: &'a [Vec<u128>],
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> GResult<()> {
   // execution init
   env_logger::init();
   

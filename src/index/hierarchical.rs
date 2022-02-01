@@ -1,6 +1,5 @@
 use serde::{Serialize, Deserialize};
 use std::cell::RefCell;
-use std::error::Error;
 use std::rc::Rc;
 
 use crate::common::error::GResult;
@@ -31,7 +30,7 @@ pub struct StackIndex {
 }
 
 impl Index for StackIndex {
-  fn predict(&self, key: &KeyT) -> Result<KeyPositionRange, Box<dyn Error>> {
+  fn predict(&self, key: &KeyT) -> GResult<KeyPositionRange> {
     let kr = self.upper_index.predict(key)?;
     self.lower_index.predict_within(&kr)
   }

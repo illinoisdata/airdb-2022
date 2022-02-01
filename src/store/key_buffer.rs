@@ -38,4 +38,8 @@ impl KeyBuffer {  // maybe implement in Serializer, Deserializer instead?
       buffer: serialized_buffer[KEY_LENGTH..].to_vec(),
     }
   }
+
+  pub fn serialized_size(&self) -> usize {
+    KEY_LENGTH + self.buffer.len()
+  }
 }

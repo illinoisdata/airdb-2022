@@ -1,6 +1,5 @@
 use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
 use serde::{Serialize, Deserialize};
-use std::error::Error;
 use std::io;
 
 use crate::common::error::GResult;
@@ -36,16 +35,6 @@ pub struct BandModel {
 impl BandModel {
   fn width(&self) -> PositionT {
     self.width
-  }
-
-  fn pick_narrower(band: Option<BandModel>, other: Option<BandModel>) -> Option<BandModel> {
-    match band {
-      Some(band_1) => match other {
-        Some(band_2) => Some(if band_1.width() <= band_2.width() { band_1 } else { band_2 }),
-        None => Some(band_1),
-      }
-      None => other
-    }
   }
 }
 
@@ -119,25 +108,65 @@ fn is_concave(kp_1: &KeyPosition, kp_2: &KeyPosition, kp_3: &KeyPosition) -> boo
   KPDirection::from_pair(kp_2, kp_3).is_lower_than(&KPDirection::from_pair(kp_1, kp_2))
 }
 
-// create band line (from pairs in line_kps) and test its width on covered points (point_kps)
-fn band_from_window(line_kps: &[KeyPosition], point_kps: &[KeyPosition]) -> Option<BandModel> {
-  if line_kps.len() <= 1 || point_kps.is_empty() {
+fn find_critical_lower(kpd: &KPDirection, kps: &[KeyPosition]) -> usize {
+  // binary search for slope_L < kpd_slope <= slope_R
+  // assuming slopes are increasing in order of kps
+  let n = kps.len();
+  assert!(n > 0);
+  if n == 1 {
+    0
+  } else {
+    let mid = (n - 1) / 2;
+    let cur_kpd = KPDirection::from_pair(&kps[mid], &kps[mid + 1]);
+    if cur_kpd.is_lower_than(kpd) {
+      find_critical_lower(kpd, &kps[mid+1..]) + mid + 1
+    } else {
+      find_critical_lower(kpd, &kps[..mid+1])
+    }
+  } 
+}
+
+fn find_critical_upper(kpd: &KPDirection, kps: &[KeyPosition]) -> usize {
+  // binary search for slope_L > kpd_slope >= slope_R
+  // assuming slopes are decreasing in order of kps
+  let n = kps.len();
+  assert!(n > 0);
+  if n == 1 {
+    0
+  } else {
+    let mid = (n - 1) / 2;
+    let cur_kpd = KPDirection::from_pair(&kps[mid], &kps[mid + 1]);
+    if kpd.is_lower_than(&cur_kpd) {
+      find_critical_upper(kpd, &kps[mid+1..]) + mid + 1
+    } else {
+      find_critical_upper(kpd, &kps[..mid+1])
+    }
+  } 
+}
+
+// create band line (from endpoints in lower_kps) and test its width on covered points (point_kps)
+fn pick_one_band_from(lower_kps: &[KeyPosition], upper_kps: &[KeyPosition]) -> Option<BandModel> {
+  if lower_kps.len() <= 1 || upper_kps.is_empty() {
     None
   } else {
-    // assert!(line_kps.len() >= 2, "Require at least two anchors to make a band");
-    // assert!(point_kps.len() >= 1, "Require at least one anchor to evaluate the band(s)");
-    (0..line_kps.len() - 1).map(|idx| {
-      let mut double_band = DoubleBandModel::new(&line_kps[idx], &line_kps[idx+1]);
-      for kp in point_kps {  // TODO: if slow, consider sliding window in reverse
-        double_band.update(kp);
-      }
-      double_band.into_band()
-    }).min_by_key(|band| band.width())
-    // let mut double_band = DoubleBandModel::new(&line_kps[0], &line_kps[1]);
-    // for kp in point_kps {  // TODO: if slow, consider sliding window in reverse
-    //   double_band.update(kp);
-    // }
-    // Some(double_band.into_band())
+    // use only endpoints: fast, but inaccurate
+    let mut double_band = DoubleBandModel::new(&lower_kps[0], &lower_kps[lower_kps.len() - 1]);
+    let kpd = KPDirection::from_pair(&lower_kps[0], &lower_kps[lower_kps.len() - 1]);
+    let lower_crit_idx = find_critical_lower(&kpd, lower_kps);
+    let upper_crit_idx = find_critical_upper(&kpd, upper_kps);
+    assert!(lower_crit_idx == 0 || KPDirection::from_pair(&lower_kps[lower_crit_idx - 1], &lower_kps[lower_crit_idx]).is_lower_than(&kpd), "{:?}, {:?}", kpd, lower_kps);
+    assert!(lower_crit_idx == lower_kps.len() - 1 || !KPDirection::from_pair(&lower_kps[lower_crit_idx], &lower_kps[lower_crit_idx + 1]).is_lower_than(&kpd), "{:?}, {:?}", kpd, lower_kps);
+    assert!(upper_crit_idx == 0 || kpd.is_lower_than(&KPDirection::from_pair(&upper_kps[upper_crit_idx - 1], &upper_kps[upper_crit_idx])), "{:?}, {:?}", kpd, upper_kps);
+    assert!(upper_crit_idx == upper_kps.len() - 1 || !kpd.is_lower_than(&KPDirection::from_pair(&upper_kps[upper_crit_idx], &upper_kps[upper_crit_idx + 1])), "{:?}, {:?}", kpd, upper_kps);
+    double_band.update(&lower_kps[lower_crit_idx]);
+    double_band.update(&upper_kps[upper_crit_idx]);
+    if lower_crit_idx < lower_kps.len() - 1 {
+      double_band.update(&lower_kps[lower_crit_idx + 1]);
+    }
+    if upper_crit_idx < upper_kps.len() - 1 {
+      double_band.update(&upper_kps[upper_crit_idx + 1]);
+    }
+    Some(double_band.into_band())
   }
 }
 
@@ -156,10 +185,8 @@ impl ConvexHull {
   }
 
   // create linear model 
-  pub fn make_narrowest_band(&self) -> Option<AnchoredBand> {
-    let lower_band = band_from_window(&self.lower_kps, &self.upper_kps);
-    let upper_band = band_from_window(&self.upper_kps, &self.lower_kps);
-    BandModel::pick_narrower(lower_band, upper_band).map(|band| AnchoredBand { 
+  pub fn make_band(&self) -> Option<AnchoredBand> {
+    pick_one_band_from(&self.lower_kps, &self.upper_kps).map(|band| AnchoredBand { 
       band,
       anchor_key: {
         assert_eq!(self.lower_kps[0], self.upper_kps[0], "Convex hull should align on its left end");
@@ -240,7 +267,7 @@ impl BandModelRecon {
 }
 
 impl ModelRecon for BandModelRecon {
-  fn reconstruct(&self, buffer: &[u8]) -> Result<Box<dyn Model>, Box<dyn Error>> {
+  fn reconstruct(&self, buffer: &[u8]) -> GResult<Box<dyn Model>> {
     let model = self.reconstruct_raw(buffer)?;
     Ok(Box::new(model))
   }
@@ -296,7 +323,6 @@ impl BandConvexHullGreedyBuilder {
       // log::info!("Adjusting max_load to {}", bm.width());
       // log::info!("Due to {:?}", bm);
       // log::info!("Hull {:#?}", self.hull);
-      // panic!("break");
       self.max_load_observed = bm.width();
     }
   }
@@ -305,7 +331,7 @@ impl BandConvexHullGreedyBuilder {
     // log::info!("Hull size at full {} / {}", self.hull.lower_kps.len(), self.hull.upper_kps.len());
     self.hull = ConvexHull::new();
     self.push_to_hull(kpr);
-    let new_band = self.hull.make_narrowest_band()
+    let new_band = self.hull.make_band()
       .expect("Convex hull should produce a band after adding a kpr"); 
     // self.maybe_readjust(&new_band);
     self.feasible_band = Some(new_band);
@@ -314,7 +340,7 @@ impl BandConvexHullGreedyBuilder {
   fn consume_produce_feasible(&mut self, kpr: &KeyPositionRange) -> Option<AnchoredBand> {
     // try adding points to convex hull and get a band model
     self.push_to_hull(kpr);
-    let current_band = self.hull.make_narrowest_band()
+    let current_band = self.hull.make_band()
       .expect("Convex hull should produce a band after adding a kpr");
 
     // check whether hull is full
@@ -360,7 +386,7 @@ impl ModelBuilder for BandConvexHullGreedyBuilder {
 
   fn finalize(mut self: Box<Self>) -> GResult<BuilderFinalReport> {
     // make last band if needed
-    let band = self.hull.make_narrowest_band();
+    let band = self.hull.make_band();
     let maybe_last_kb = self.generate_segment(band)?;
     
     Ok(BuilderFinalReport {
@@ -471,7 +497,7 @@ mod tests {
   #[test]
   fn greedy_test() -> GResult<()> {
     let kprs = generate_test_kprs();
-    let mut bm_builder = Box::new(BandConvexHullGreedyBuilder::new(20));
+    let mut bm_builder = Box::new(BandConvexHullGreedyBuilder::new(40));
 
     // start adding points
     let _model_kb_0 = assert_none_buffer(bm_builder.consume(&kprs[0])?);
@@ -490,15 +516,15 @@ mod tests {
       model_loads: bm_loads,
     } = bm_builder.finalize()?;
     let model_kb_8 = assert_some_buffer(last_buffer);
-    assert_eq!(bm_loads, vec![20]);
+    assert_eq!(bm_loads, vec![40]);
 
     // check buffers
     test_same_model_box(
       &bm_serde.reconstruct(&model_kb_3)?,
       &Box::new(BandModel {
-        kp_1: KPDirection { x: 0, y: 0 },
+        kp_1: KPDirection { x: 0, y: -20 },
         kp_2: KPDirection { x: 100, y: 10 },
-        width: 20,
+        width: 27,
       }),
       0,
       101,
@@ -506,9 +532,9 @@ mod tests {
     test_same_model_box(
       &bm_serde.reconstruct(&model_kb_6)?,
       &Box::new(BandModel {
-        kp_1: KPDirection { x: 105, y: 30 },
+        kp_1: KPDirection { x: 105, y: 10 },
         kp_2: KPDirection { x: 115, y: 70 },
-        width: 20,
+        width: 40,
       }),
       105,
       116,
@@ -564,9 +590,9 @@ mod tests {
     test_same_model_box(
       &bm_serde.reconstruct(&model_kb_7)?,
       &Box::new(BandModel {
-        kp_1: KPDirection { x: 100, y: 10 },
+        kp_1: KPDirection { x: 0, y: -910 },
         kp_2: KPDirection { x: 120, y: 90 },
-        width: 910,
+        width: 917,
       }),
       0,
       121,

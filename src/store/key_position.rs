@@ -44,15 +44,16 @@ impl KPDirection {
   }
 
   pub fn is_lower_than(&self, other: &KPDirection) -> bool {
-    self.y * other.x < self.x * other.y
+    // need to square the calculation space to multiple
+    self.y as i128 * (other.x as i128) < self.x as i128 * other.y as i128
   }
 
   pub fn interpolate_with(&self, other: &KPDirection, key: &KeyT) -> i64 {
     if self.x == other.x {
       self.y
     } else {
-      // (self.y + ((*key as f64 - self.x) / (other.x - self.x)) * (other.y - self.y)).floor() as PositionT
-      self.y + ((*key as i64 - self.x) * (other.y - self.y) / (other.x - self.x))
+      // need to square the calculation space to multiple
+      self.y + ((*key as i64 - self.x) as i128 * (other.y - self.y) as i128 / (other.x - self.x) as i128) as i64
     }
   }
 }

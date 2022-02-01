@@ -106,7 +106,7 @@ impl ModelDrafter for BuilderAsDrafter {
     let mut key_buffers = Vec::new();
     for kpr in kps.range_iter() {
       if let Some(model_kb) = model_builder.consume(&kpr)? {
-        total_size += model_kb.buffer.len();
+        total_size += model_kb.serialized_size();
         key_buffers.push(model_kb);
       }
     }
@@ -114,7 +114,7 @@ impl ModelDrafter for BuilderAsDrafter {
     // finalize last bits of model
     let BuilderFinalReport { maybe_model_kb, serde, model_loads } = model_builder.finalize()?;
     if let Some(model_kb) = maybe_model_kb {
-        total_size += model_kb.buffer.len();
+        total_size += model_kb.serialized_size();
         key_buffers.push(model_kb);
     }
 
