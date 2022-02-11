@@ -1,3 +1,10 @@
+use azure_core::prelude::Range as AzureRange;
+use azure_storage::core::prelude::StorageAccountClient;
+use azure_storage_blobs::prelude::AsBlobClient;
+use azure_storage_blobs::prelude::AsContainerClient;
+use azure_storage_blobs::prelude::BlobClient;
+use azure_storage_blobs::prelude::ContainerClient;
+use bytes::Bytes;
 use memmap2::Mmap;
 use memmap2::MmapOptions;
 use std::collections::hash_map::Entry;
@@ -8,6 +15,8 @@ use std::io::Write;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::runtime::Runtime;
 
 use crate::common::error::GResult;
 
@@ -182,6 +191,115 @@ impl Adaptor for MmapAdaptor {
   fn write_all(&mut self, path: &Path, buf: &[u8]) -> GResult<()> {
     self.unmap(path)?;
     self.fs_adaptor.write_all(path, buf)
+  }
+}
+
+
+/* File system adaptor with mmap as cache/buffer pool layer */
+
+// https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs
+pub enum AzureBlobType {  // control only at blob creation time
+  BlockBlob,  // fast read/write large block(s) of data
+  AppendBlob,  // fast append
+  PageBlob,  // fast random read/write, basis of azure virtual disk
+}
+
+pub struct AzureContainerAdaptor {
+  root_path: PathBuf,
+  container_client: Arc<ContainerClient>,
+  blob_type: AzureBlobType,
+
+  rt: Runtime,  // TODO: move out? static/global variable?
+}
+
+impl AzureContainerAdaptor {  // container level
+  pub fn new_block<P: AsRef<Path>>(container: &str, root_path: &P) -> AzureContainerAdaptor {
+    AzureContainerAdaptor::new(container, root_path, AzureBlobType::BlockBlob)
+  }
+
+  pub fn new_append<P: AsRef<Path>>(container: &str, root_path: &P) -> AzureContainerAdaptor {
+    AzureContainerAdaptor::new(container, root_path, AzureBlobType::AppendBlob)
+  }
+
+  pub fn new_page<P: AsRef<Path>>(container: &str, root_path: &P) -> AzureContainerAdaptor {
+    AzureContainerAdaptor::new(container, root_path, AzureBlobType::PageBlob)
+  }
+
+  fn new<P: AsRef<Path>>(container: &str, root_path: &P, blob_type: AzureBlobType) -> AzureContainerAdaptor {
+    // TODO: static storage account client?
+    let account = std::env::var("AZURE_STORAGE_ACCOUNT").expect("Set env variable AZURE_STORAGE_ACCOUNT first!");
+    let key = std::env::var("AZURE_STORAGE_KEY").expect("Set env variable AZURE_STORAGE_KEY first!");
+    let http_client = azure_core::new_http_client();
+    let container_client = StorageAccountClient::new_access_key(http_client, &account, &key)
+      .as_container_client(container);
+    AzureContainerAdaptor {
+      root_path: root_path.as_ref().to_path_buf(),
+      container_client,
+      blob_type,
+      rt: Runtime::new().expect("Failed to initialize tokio runtim"),
+    }
+  }
+
+  fn blob_client(&self, path: &Path) -> Arc<BlobClient> {
+    let blob_name = self.root_path.join(path).into_os_string().into_string().expect("Failed to parse blob path");
+    self.container_client.as_blob_client(&blob_name)
+  }
+
+  async fn read_all_async(&self, path: &Path) -> GResult<Vec<u8>> {
+    let blob_response = self.blob_client(path)
+      .get()
+      .execute()
+      .await?;
+    Ok(blob_response.data.to_vec())
+  }
+
+  async fn read_range_async(&self, path: &Path, range: &Range) -> GResult<Vec<u8>> {
+    let blob_response = self.blob_client(path)
+      .get()
+      .range(AzureRange::new(range.offset.try_into().unwrap(), (range.offset + range.length).try_into().unwrap()))
+      .execute()
+      .await?;
+    Ok(blob_response.data.to_vec())
+  }
+
+  async fn write_all_async(&self, path: &Path, buf: &[u8]) -> GResult<()> {
+    let blob_client = self.blob_client(path);
+    match &self.blob_type {
+      AzureBlobType::BlockBlob => {
+        // TODO: avoid copy?
+        let response = blob_client.put_block_blob(Bytes::copy_from_slice(buf)).execute().await?;
+        log::debug!("{:?}", response);
+        Ok(())
+      }
+      AzureBlobType::AppendBlob => {
+        let response = blob_client.put_append_blob().execute().await?;
+        log::debug!("{:?}", response);
+        todo!()  // TODO: best way to write to append blob?
+      }
+      AzureBlobType::PageBlob => {
+        let response = blob_client.put_page_blob(buf.len().try_into().unwrap()).execute().await?;
+        log::debug!("{:?}", response);
+        todo!()  // TODO: write in 512-byte pages
+      }
+    }
+  }
+}
+
+impl Adaptor for AzureContainerAdaptor {
+  fn read_all(&mut self, path: &Path) -> GResult<Vec<u8>> {
+    self.rt.block_on(self.read_all_async(path))
+  }
+
+  fn read_range(&mut self, path: &Path, range: &Range) -> GResult<Vec<u8>> {
+    self.rt.block_on(self.read_range_async(path, range))
+  }
+
+  fn create(&mut self, _path: &Path) -> GResult<()> {
+    Ok(())  // do nothing, azure blob creates hierarchy on blob creation
+  }
+
+  fn write_all(&mut self, path: &Path, buf: &[u8]) -> GResult<()> {
+    self.rt.block_on(self.write_all_async(path, buf))
   }
 }
 

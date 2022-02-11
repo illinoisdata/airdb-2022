@@ -12,15 +12,21 @@ readme = "https://github.com/illinoisdata/airindex/blob/main/README.md"
 
 [dependencies]
 
+azure_core = "0.1.1"
+azure_storage = "0.1.0"
+azure_storage_blobs = "0.1.0"
 bson = "2.0.0"
 byteorder = "1.4.3"
+bytes = "1.1.0"
 env_logger = "0.9.0"
 erased-serde = "0.3"
 flexbuffers = "2.0.0"
+futures = "0.3.21"
 itertools = "0.10.3"
 log = "0.4.14"
 memmap2 = "0.5.2"
 num = "0.4.0"
+openssl = { version = "0.10.38", features = ["vendored"] }
 rand = "0.8.3"
 rand_pcg = "0.3.1"
 rayon = "1.5.1"
@@ -33,6 +39,7 @@ structopt = { version = "0.3", default-features = false }
 tempdir = "0.3.7"
 tempfile = "3"
 test-log = "0.2.8"
+tokio = "1.16.1"
 
 [[bin]]
 name = "profile_storage"

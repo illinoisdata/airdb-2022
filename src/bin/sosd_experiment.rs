@@ -19,6 +19,7 @@ use airindex::io::profile::Bandwidth;
 use airindex::io::profile::Latency;
 use airindex::io::profile::StorageProfile;
 use airindex::io::storage::Adaptor;
+use airindex::io::storage::AzureContainerAdaptor;
 use airindex::io::storage::ExternalStorage;
 use airindex::io::storage::FileSystemAdaptor;
 use airindex::io::storage::MmapAdaptor;
@@ -42,9 +43,15 @@ pub struct Cli {
   /// directory to store the database
   #[structopt(long)]
   db_path: String,
+  /// io adaptor to use [fs, azure]
+  #[structopt(long)]
+  io: String,
   /// output path to log experiment results in append mode
   #[structopt(long)]
   out_path: String,
+  /// azure container name
+  #[structopt(long)]
+  azure_container: Option<String>,
 
   /// action: build index
   #[structopt(long)]
@@ -116,11 +123,7 @@ impl Experiment {
   pub fn from(args: &Cli) -> GResult<Experiment> {
     let mut context = Context::new();
     context.put_storage({
-      let adaptor = if args.no_cache {
-        Box::new(FileSystemAdaptor::new(&args.root_path)) as Box<dyn Adaptor>
-      } else {
-        Box::new(MmapAdaptor::new(&args.root_path)) as Box<dyn Adaptor>
-      };
+      let adaptor = Experiment::load_io(args);
       &Rc::new(RefCell::new(ExternalStorage::new(adaptor)))
     });
     if let Some(path) = PathBuf::from(&args.db_path).parent() {
@@ -133,6 +136,28 @@ impl Experiment {
       context,
       db_meta_path,
     })
+  }
+
+  fn load_io(args: &Cli) -> Box<dyn Adaptor> {
+    match args.io.as_str() {
+      "fs" => {  // file system
+        if args.no_cache {
+          Box::new(FileSystemAdaptor::new(&args.root_path)) as Box<dyn Adaptor>
+        } else {
+          Box::new(MmapAdaptor::new(&args.root_path)) as Box<dyn Adaptor>
+        }
+      },
+      "azure" => {  // file system
+        if args.no_cache {
+          let container = args.azure_container.as_ref().expect("Azure IO requires container names");
+          log::warn!("Currently only support benchmarking on the same container");
+          Box::new(AzureContainerAdaptor::new_block(container, &args.root_path)) as Box<dyn Adaptor>
+        } else {
+          panic!("Cache not implemented for Azure IO")
+        }
+      },
+      _ => panic!("Invalid io type \"{}\"", args.io),
+    }
   }
 
   pub fn build(&mut self, args: &Cli) -> GResult<()> {
