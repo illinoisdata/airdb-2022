@@ -1,13 +1,16 @@
 use serde::{Serialize, Deserialize};
 use std::cell::RefCell;
 use std::rc::Rc;
+use url::Url;
 
 use crate::common::error::GResult;
 use crate::io::storage::ExternalStorage;
 
 
+#[derive(Debug)]
 pub struct Context {
   pub storage: Option<Rc<RefCell<ExternalStorage>>>,
+  pub store_prefix: Option<Url>,
 }
 
 impl Default for Context {
@@ -20,6 +23,7 @@ impl Context {
   pub fn new() -> Context {
     Context {
       storage: None,
+      store_prefix: None,
     }
   }
 
@@ -30,6 +34,16 @@ impl Context {
     } else {
       // if not, update
       self.storage = Some(Rc::clone(storage));
+    }
+  }
+
+  pub fn put_store_prefix(&mut self, store_prefix: &Url) {
+    if let Some(current_store_prefix) = &self.store_prefix {
+      // if exists, check same object
+      assert_eq!(store_prefix, current_store_prefix);
+    } else {
+      // if not, update
+      self.store_prefix = Some(store_prefix.clone());
     }
   }
 }

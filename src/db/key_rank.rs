@@ -6,9 +6,8 @@ use rand_pcg::Pcg64;
 use serde::{Serialize, Deserialize};
 use sscanf::scanf;
 use std::fs::OpenOptions;
-use std::io::BufRead;
-use std::io::BufReader;
 use std::io::Write;
+use std::str::from_utf8;
 
 use crate::common::error::GResult;
 use crate::index::Index;
@@ -120,34 +119,30 @@ pub struct SOSDRankDBMeta {
 }
 
 impl SOSDRankDB {  // for Metaserde
-  pub fn to_meta(self, ctx: &mut Context) -> GResult<SOSDRankDBMeta> {
+  pub fn to_meta(self, data_ctx: &mut Context, index_ctx: &mut Context) -> GResult<SOSDRankDBMeta> {
     Ok(SOSDRankDBMeta {
-      array_store_state: self.array_store.to_meta_state(ctx)?,
+      array_store_state: self.array_store.to_meta_state(data_ctx)?,
       index: match self.index {
-        Some(index) => Some(index.to_meta(ctx)?),
+        Some(index) => Some(index.to_meta(index_ctx)?),
         None => None,
       }
     })
   }
 
-  pub fn from_meta(meta: SOSDRankDBMeta, ctx: &Context) -> GResult<SOSDRankDB> {
+  pub fn from_meta(meta: SOSDRankDBMeta, data_ctx: &Context, index_ctx: &Context) -> GResult<SOSDRankDB> {
     Ok(SOSDRankDB {
-      array_store: ArrayStore::from_meta(meta.array_store_state, ctx)?,
+      array_store: ArrayStore::from_meta(meta.array_store_state, data_ctx)?,
       index: match meta.index {
-        Some(index_meta) => Some(IndexMeta::from_meta(index_meta, ctx)?),
+        Some(index_meta) => Some(IndexMeta::from_meta(index_meta, index_ctx)?),
         None => None,
       },
     })
   }
 }
 
-pub fn read_keyset(keyset_path: String) -> GResult<Vec<KeyRank>> {
-  let keyset_file = OpenOptions::new()
-    .read(true)
-    .open(keyset_path.as_str())?;
-  let reader = BufReader::new(keyset_file);
-  Ok(reader.lines().map(|line| {
-    let (key, rank) = scanf!(line.unwrap(), "{} {}", KeyT, usize).unwrap();
+pub fn read_keyset(keyset_bytes: &[u8]) -> GResult<Vec<KeyRank>> {
+  Ok(from_utf8(keyset_bytes)?.lines().map(|line| {
+    let (key, rank) = scanf!(line, "{} {}", KeyT, usize).unwrap();
     KeyRank { key, rank }
   }).collect())
 }

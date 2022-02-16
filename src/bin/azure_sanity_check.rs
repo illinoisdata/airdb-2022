@@ -1,11 +1,11 @@
 use rand::Rng;
 use serde::Serialize;
-use std::path::Path;
 use structopt::StructOpt;
+use url::Url;
 
 use airindex::common::error::GResult;
 use airindex::io::storage::Adaptor;
-use airindex::io::storage::AzureContainerAdaptor;
+use airindex::io::storage::AzureStorageAdaptor;
 use airindex::io::storage::Range;
 
 
@@ -40,17 +40,19 @@ fn main() -> GResult<()> {
 
   // create adaptor
   log::info!("Creating azure adpator");
-  let mut adaptor = AzureContainerAdaptor::new_block(&args.container, &args.blob_prefix);
+  let mut adaptor = AzureStorageAdaptor::new_block()?;
+  let test_path = format!("az:///{}/{}", &args.container, &args.blob_prefix);
+  let test_url = Url::parse(&test_path)?;
 
   // create some blob
   log::info!("Writing a blob for test");
   let content = vec![rand::thread_rng().gen::<u8>(); 2048];
-  adaptor.write_all(Path::new(&args.blob_name), &content)?;
+  adaptor.write_all(&test_url.join(&args.blob_name)?, &content)?;
 
   // read blob
   log::info!("Reading whole blob");
   {
-    let blob = adaptor.read_all(Path::new(&args.blob_name))?;
+    let blob = adaptor.read_all(&test_url.join(&args.blob_name)?)?;
     assert_eq!(blob.len(), content.len());
     for idx in 0..content.len() {
       assert_eq!(blob[idx], content[idx]);
@@ -61,7 +63,7 @@ fn main() -> GResult<()> {
   log::info!("Reading blob in range");
   {
     let range = Range { offset: 512, length: 1024 };
-    let blob = adaptor.read_range(Path::new(&args.blob_name), &range)?;
+    let blob = adaptor.read_range(&test_url.join(&args.blob_name)?, &range)?;
     assert_eq!(blob.len(), range.length);
     for idx in 0..range.length {
       assert_eq!(blob[idx], content[range.offset + idx]);
@@ -70,10 +72,10 @@ fn main() -> GResult<()> {
 
   // read blob range from different adpator
   log::info!("Reading blob in range with a new adaptor");
-  let mut adaptor2 = AzureContainerAdaptor::new_block(&args.container, &args.blob_prefix);
+  let mut adaptor2 = AzureStorageAdaptor::new_block()?;
   {
     let range = Range { offset: 512, length: 1024 };
-    let blob = adaptor2.read_range(Path::new(&args.blob_name), &range)?;
+    let blob = adaptor2.read_range(&test_url.join(&args.blob_name)?, &range)?;
     assert_eq!(blob.len(), range.length);
     for idx in 0..range.length {
       assert_eq!(blob[idx], content[range.offset + idx]);

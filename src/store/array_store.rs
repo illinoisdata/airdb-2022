@@ -1,10 +1,11 @@
 use serde::{Serialize, Deserialize};
 use std::cell::RefCell;
 use std::fmt;
-use std::path::PathBuf;
 use std::rc::Rc;
+use url::Url;
 
 use crate::common::error::GResult;
+use crate::common::error::IncompleteDataStoreFromMeta;
 use crate::io::storage::Adaptor;
 use crate::io::storage::ExternalStorage;
 use crate::io::storage::Range;
@@ -22,7 +23,7 @@ use crate::store::key_position::PositionT;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ArrayStoreState {
-  array_path: PathBuf,
+  array_name: String,
   data_size: usize,
   offset: usize,  // in bytes, array file might contain some header
   length: usize,  // number of elements
@@ -31,6 +32,7 @@ pub struct ArrayStoreState {
 
 pub struct ArrayStore {
   storage: Rc<RefCell<ExternalStorage>>,
+  prefix_url: Url,
   state: ArrayStoreState,
 }
 
@@ -41,22 +43,24 @@ impl fmt::Debug for ArrayStore {
 }
 
 impl ArrayStore {
-  pub fn new_sized(storage: &Rc<RefCell<ExternalStorage>>, array_path: PathBuf, data_size: usize) -> ArrayStore {
+  pub fn new_sized(storage: &Rc<RefCell<ExternalStorage>>, prefix_url: Url, array_name: String, data_size: usize) -> ArrayStore {
     ArrayStore{
       storage: Rc::clone(storage),
+      prefix_url,
       state: ArrayStoreState {
-        array_path,
+        array_name,
         data_size,
         offset: 0,
         length: 0,
       },
     }
   }
-  pub fn from_exact(storage: &Rc<RefCell<ExternalStorage>>, array_path: PathBuf, data_size: usize, offset: usize, length: usize) -> ArrayStore {
+  pub fn from_exact(storage: &Rc<RefCell<ExternalStorage>>, prefix_url: Url, array_name: String, data_size: usize, offset: usize, length: usize) -> ArrayStore {
     ArrayStore{
       storage: Rc::clone(storage),
+      prefix_url,
       state: ArrayStoreState {
-        array_path,
+        array_name,
         data_size,
         offset,
         length,
@@ -83,7 +87,7 @@ impl ArrayStore {
   }
 
   fn write_array(&self, array_buffer: &[u8]) -> GResult<()> {
-      self.storage.borrow_mut().write_all(&self.state.array_path, array_buffer)
+      self.storage.borrow_mut().write_all(&self.array_url()?, array_buffer)
   }
 
   fn read_page_range(&self, offset: PositionT, length: PositionT) -> GResult<(Vec<u8>, usize)> {
@@ -94,7 +98,7 @@ impl ArrayStore {
 
     // make read requests
     let array_buffer = self.storage.borrow_mut().read_range(
-      &self.state.array_path,
+      &self.array_url()?,
       &Range{
         offset: start_rank * self.state.data_size + self.state.offset,
         length: (end_rank - start_rank) * self.state.data_size
@@ -102,17 +106,16 @@ impl ArrayStore {
     )?;
     Ok((array_buffer, start_rank))
   }
+
+  fn array_url(&self) -> GResult<Url> {
+    Ok(self.prefix_url.join(&self.state.array_name)?)
+  }
 }
 
 impl DataStore for ArrayStore {
   fn begin_write(&mut self) -> GResult<Box<dyn DataStoreWriter + '_>> {
     // since we require mutable borrow, there will only be one writer in a code block.
     // this would disallow readers while the writer's lifetime as well
-
-    // prepare the prefix directory
-    self.storage.borrow_mut().create(&PathBuf::from(""))?;
-
-    // make the writer
     self.state.length = 0;  // TODO: append write?
     Ok(Box::new(ArrayStoreWriter::new(self)))
   }
@@ -130,20 +133,25 @@ impl DataStore for ArrayStore {
 
 impl DataStoreMetaserde for ArrayStore {  // for Metaserde
   fn to_meta(&self, ctx: &mut Context) -> GResult<DataStoreMeta> {
-    ctx.put_storage(&self.storage);
-    Ok(DataStoreMeta::ArrayStore{ state: self.state.clone() })
+    Ok(DataStoreMeta::ArrayStore{ state: self.to_meta_state(ctx)? })
   }
 }
 
 impl ArrayStore {  // for Metaserde
-  pub fn to_meta_state(self, ctx: &mut Context) -> GResult<ArrayStoreState> {
+  pub fn to_meta_state(&self, ctx: &mut Context) -> GResult<ArrayStoreState> {
     ctx.put_storage(&self.storage);
-    Ok(self.state)
+    ctx.put_store_prefix(&self.prefix_url);
+    Ok(self.state.clone())
   }
 
   pub fn from_meta(meta: ArrayStoreState, ctx: &Context) -> GResult<ArrayStore> {
     let storage = Rc::clone(ctx.storage.as_ref().expect("ArrayStore requires storage context"));
-    Ok(ArrayStore{ storage, state: meta })
+    let store_prefix = ctx.store_prefix.as_ref().ok_or_else(|| IncompleteDataStoreFromMeta::boxed("ArrayStore requires store prefix url"))?;
+    Ok(ArrayStore{
+      storage,
+      prefix_url: store_prefix.clone(),
+      state: meta
+    })
   }
 }
 
@@ -282,7 +290,8 @@ impl<'a> Iterator for ArrayStoreReaderIterWithRank<'a> {
 mod tests {
   use super::*;
   use tempfile::TempDir;
-  use crate::io::storage::MmapAdaptor;
+  use crate::io::storage::FileSystemAdaptor;
+  use crate::io::storage::url_from_dir_path;
   use crate::store::key_position::KeyT;
 
   fn generate_simple_kv() -> ([KeyT; 10], [Vec<u8>; 10]) {
@@ -308,9 +317,15 @@ mod tests {
 
     // setup a block store
     let temp_dir = TempDir::new()?;
-    let mfsa = MmapAdaptor::new(&temp_dir);
-    let es = Rc::new(RefCell::new(ExternalStorage::new(Box::new(mfsa))));
-    let mut arrstore = ArrayStore::new_sized(&es, PathBuf::from("test_arrstore"), 12);
+    let temp_dir_url = &url_from_dir_path(temp_dir.path())?;
+    let fsa = FileSystemAdaptor::new();
+    let es = Rc::new(RefCell::new(ExternalStorage::new().with("file".to_string(), Box::new(fsa))?));
+    let mut arrstore = ArrayStore::new_sized(
+      &es,
+      temp_dir_url.clone(),
+      "test_arrstore".to_string(),
+      12
+    );
 
     // write but never commit
     let _kps = {

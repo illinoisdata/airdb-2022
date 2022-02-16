@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::path::PathBuf;
+use url::Url;
 
 use crate::io::storage::ExternalStorage;
 use crate::store::array_store::ArrayStore;
@@ -18,13 +18,14 @@ impl StoreDesigner {
     StoreDesigner { storage: Rc::clone(storage) }
   }
 
-  pub fn design_for_kbs(&self, key_buffers: &[KeyBuffer], store_name: &str) -> Box<dyn DataStore> {
+  pub fn design_for_kbs(&self, key_buffers: &[KeyBuffer], prefix_url: Url, store_name: String) -> Box<dyn DataStore> {
     match StoreDesigner::data_size_if_sized(key_buffers) {
       Some(data_size) => {
         log::debug!("Using ArrayStore with data_size= {}", data_size);
         Box::new(ArrayStore::new_sized(
           &self.storage,
-          PathBuf::from(store_name),
+          prefix_url,
+          store_name,
           data_size,
         ))
       },
@@ -33,7 +34,7 @@ impl StoreDesigner {
         log::debug!("Using BlockStore with page_size= {}", page_size);
         Box::new(BlockStore::builder(store_name)
           .page_size(page_size)  // TODO: pick better page size?
-          .build(&self.storage))
+          .build(&self.storage, prefix_url))
       },
     }
   }

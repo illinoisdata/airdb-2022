@@ -1,24 +1,25 @@
 use serde::{Serialize, Deserialize};
 use std::cell::RefCell;
 use std::fmt;
-use std::path::PathBuf;
 use std::rc::Rc;
+use url::Url;
 
 use crate::common::error::GResult;
+use crate::common::error::IncompleteDataStoreFromMeta;
 use crate::io::storage::Adaptor;
 use crate::io::storage::ExternalStorage;
 use crate::io::storage::Range;
 use crate::io::storage::ReadRequest;
 use crate::meta::Context;
 use crate::store::DataStore;
+use crate::store::DataStoreMeta;
+use crate::store::DataStoreMetaserde;
 use crate::store::DataStoreReader;
 use crate::store::DataStoreReaderIter;
 use crate::store::DataStoreWriter;
 use crate::store::key_buffer::KeyBuffer;
 use crate::store::key_position::KeyPositionCollection;
 use crate::store::key_position::PositionT;
-use crate::store::DataStoreMeta;
-use crate::store::DataStoreMetaserde;
 
 
 /* Page format */
@@ -46,22 +47,22 @@ fn read_page(page: &[u8]) -> (FlagT, &[u8]) {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BlockStoreConfig {
-  prefix: PathBuf,
+  block_name: String,
   block_size: usize,
   page_size: usize,
 }
 
 impl BlockStoreConfig {
-  fn new(prefix_name: &str) -> BlockStoreConfig {
+  fn new(block_name: String) -> BlockStoreConfig {
     BlockStoreConfig {
-        prefix: PathBuf::from(prefix_name),
+        block_name,
         block_size: 1 << 32,  // 4GB
         page_size: 32,
     }
   }
 
-  pub fn prefix(mut self, prefix: PathBuf) -> BlockStoreConfig {
-    self.prefix = prefix;
+  pub fn block_name(mut self, block_name: String) -> BlockStoreConfig {
+    self.block_name = block_name;
     self
   }
 
@@ -75,8 +76,8 @@ impl BlockStoreConfig {
     self
   }
 
-  pub fn build(self, storage: &Rc<RefCell<ExternalStorage>>) -> BlockStore {
-    BlockStore::new(storage, self)
+  pub fn build(self, storage: &Rc<RefCell<ExternalStorage>>, prefix_url: Url) -> BlockStore {
+    BlockStore::new(storage, prefix_url, self)
   }
 }
 
@@ -88,6 +89,7 @@ pub struct BlockStoreState {
 
 pub struct BlockStore {
   storage: Rc<RefCell<ExternalStorage>>,
+  prefix_url: Url,
   state: BlockStoreState,
 }
 
@@ -98,9 +100,10 @@ impl fmt::Debug for BlockStore {
 }
 
 impl BlockStore {
-  fn new(storage: &Rc<RefCell<ExternalStorage>>, cfg: BlockStoreConfig) -> BlockStore {
+  fn new(storage: &Rc<RefCell<ExternalStorage>>, prefix_url: Url, cfg: BlockStoreConfig) -> BlockStore {
     BlockStore{
       storage: Rc::clone(storage),
+      prefix_url,
       state: BlockStoreState {
         cfg,
         total_pages: 0,
@@ -108,8 +111,8 @@ impl BlockStore {
     }
   }
 
-  pub fn builder(prefix_name: &str) -> BlockStoreConfig {
-    BlockStoreConfig::new(prefix_name)
+  pub fn builder(block_name: String) -> BlockStoreConfig {
+    BlockStoreConfig::new(block_name)
   }
 
   fn end_write(&mut self, written_pages: usize) {
@@ -124,14 +127,14 @@ impl BlockStore {
     self.state.cfg.block_size / self.state.cfg.page_size
   }
 
-  fn block_path(&self, block_idx: usize) -> PathBuf {
-    let block_name = format!("block_{}", block_idx);
-    self.state.cfg.prefix.join(block_name)
+  fn block_url(&self, block_idx: usize) -> GResult<Url> {
+    let block_fullname = format!("{}_block_{}", self.state.cfg.block_name, block_idx);
+    Ok(self.prefix_url.join(&block_fullname)?)
   }
 
   fn write_block(&self, block_idx: usize, block_buffer: &[u8]) -> GResult<()> {
-      let block_path = self.block_path(block_idx);
-      self.storage.borrow_mut().write_all(&block_path, block_buffer)
+      let block_url = self.block_url(block_idx)?;
+      self.storage.borrow_mut().write_all(&block_url, block_buffer)
   }
 
   fn read_page_range(&self, offset: PositionT, length: PositionT) -> GResult<(Vec<FlagT>, Vec<u8>)> {
@@ -141,7 +144,7 @@ impl BlockStore {
     let end_page_idx = std::cmp::min(end_offset / self.state.cfg.page_size, self.state.total_pages);
 
     // make read requests
-    let requests = self.read_page_range_requests(start_page_idx, end_page_idx);
+    let requests = self.read_page_range_requests(start_page_idx, end_page_idx)?;
     let section_buffers = self.storage.borrow_mut().read_batch_sequential(&requests)?;
     let mut flags = Vec::new();
     let mut chunks_buffer = Vec::new();
@@ -156,7 +159,7 @@ impl BlockStore {
     Ok((flags, chunks_buffer))
   }
 
-  fn read_page_range_requests(&self, mut start_page_idx: usize, end_page_idx: usize) -> Vec<ReadRequest> {
+  fn read_page_range_requests(&self, mut start_page_idx: usize, end_page_idx: usize) -> GResult<Vec<ReadRequest>> {
     let pages_per_block = self.state.cfg.block_size / self.state.cfg.page_size;
     let mut start_block_idx = start_page_idx / pages_per_block;
     let mut read_requests = Vec::new();
@@ -174,7 +177,7 @@ impl BlockStore {
 
       // add read request for this section
       read_requests.push(ReadRequest::Range {
-        path: self.block_path(start_block_idx),
+        url: self.block_url(start_block_idx)?,
         range: Range{ offset: start_section_offset, length: section_length },
       });
 
@@ -182,7 +185,7 @@ impl BlockStore {
       start_page_idx = end_section_page_idx;
       start_block_idx += 1;
     }
-    read_requests
+    Ok(read_requests)
   }
 }
 
@@ -190,11 +193,6 @@ impl DataStore for BlockStore {
   fn begin_write(&mut self) -> GResult<Box<dyn DataStoreWriter + '_>> {
     // since we require mutable borrow, there will only be one writer in a code block.
     // this would disallow readers while the writer's lifetime as well
-
-    // prepare the prefix directory
-    self.storage.borrow_mut().create(&self.state.cfg.prefix)?;
-
-    // make the writer
     self.state.total_pages = 0;  // TODO: append write?
     Ok(Box::new(BlockStoreWriter::new(self)))
   }
@@ -214,6 +212,7 @@ impl DataStore for BlockStore {
 impl DataStoreMetaserde for BlockStore {  // for Metaserde
   fn to_meta(&self, ctx: &mut Context) -> GResult<DataStoreMeta> {
     ctx.put_storage(&self.storage);
+    ctx.put_store_prefix(&self.prefix_url);
     Ok(DataStoreMeta::BlockStore{ state: self.state.clone() })
   }
 }
@@ -221,7 +220,12 @@ impl DataStoreMetaserde for BlockStore {  // for Metaserde
 impl BlockStore {  // for Metaserde
   pub fn from_meta(meta: BlockStoreState, ctx: &Context) -> GResult<BlockStore> {
     let storage = Rc::clone(ctx.storage.as_ref().expect("BlockStore requires storage context"));
-    Ok(BlockStore{ storage, state: meta })
+    let store_prefix = ctx.store_prefix.as_ref().ok_or_else(|| IncompleteDataStoreFromMeta::boxed("BlockStore requires store prefix url"))?;
+    Ok(BlockStore{
+      storage, 
+      prefix_url: store_prefix.clone(),
+      state: meta
+    })
   }
 }
 
@@ -403,7 +407,8 @@ impl<'a> Iterator for BlockStoreReaderIter<'a> {
 mod tests {
   use super::*;
   use tempfile::TempDir;
-  use crate::io::storage::MmapAdaptor;
+  use crate::io::storage::FileSystemAdaptor;
+  use crate::io::storage::url_from_dir_path;
   use crate::store::key_position::KeyT;
 
   fn generate_simple_kv() -> ([KeyT; 14], [Box<[u8]>; 14]) {
@@ -448,11 +453,12 @@ mod tests {
 
     // setup a block store
     let temp_dir = TempDir::new()?;
-    let mfsa = MmapAdaptor::new(&temp_dir);
-    let es = Rc::new(RefCell::new(ExternalStorage::new(Box::new(mfsa))));
-    let mut bstore = BlockStore::builder("test_bstore")
+    let temp_dir_url = &url_from_dir_path(temp_dir.path())?;
+    let fsa = FileSystemAdaptor::new();
+    let es = Rc::new(RefCell::new(ExternalStorage::new().with("file".to_string(), Box::new(fsa))?));
+    let mut bstore = BlockStore::builder("bstore".to_string())
       .block_size(128)  // tune down for unit testing
-      .build(&es);
+      .build(&es, temp_dir_url.clone());
 
     // write but never commit
     let _kps = {

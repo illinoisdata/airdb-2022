@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Instant;
 use structopt::StructOpt;
+use url::Url;
 
 use airindex::common::error::GResult;
 use airindex::db::key_rank::read_keyset;
@@ -19,7 +20,7 @@ use airindex::io::profile::Bandwidth;
 use airindex::io::profile::Latency;
 use airindex::io::profile::StorageProfile;
 use airindex::io::storage::Adaptor;
-use airindex::io::storage::AzureContainerAdaptor;
+use airindex::io::storage::AzureStorageAdaptor;
 use airindex::io::storage::ExternalStorage;
 use airindex::io::storage::FileSystemAdaptor;
 use airindex::io::storage::MmapAdaptor;
@@ -37,21 +38,9 @@ use airindex::store::key_position::KeyPositionCollection;
 
 #[derive(Debug, Serialize, StructOpt)]
 pub struct Cli {
-  /// path to mount directory for profiling
-  #[structopt(long)]
-  root_path: String,
-  /// directory to store the database
-  #[structopt(long)]
-  db_path: String,
-  /// io adaptor to use [fs, azure]
-  #[structopt(long)]
-  io: String,
   /// output path to log experiment results in append mode
   #[structopt(long)]
   out_path: String,
-  /// azure container name
-  #[structopt(long)]
-  azure_container: Option<String>,
 
   /// action: build index
   #[structopt(long)]
@@ -64,19 +53,28 @@ pub struct Cli {
   #[structopt(long)]
   dataset_name: String,
 
+
+  /* SOSD params */
+
+  /// url to the sosd data blob
+  #[structopt(long)]
+  sosd_blob_url: String,
   /// data type in the blob [uint32, uint64]
   #[structopt(long)]
   sosd_dtype: String,
-  /// relative path from root_path to the sosd data blob
-  #[structopt(long)]
-  sosd_blob_path: String,
   /// number of elements, in millions (typically 200, 400, 500, 800)
   #[structopt(long)]
   sosd_size: usize,
-  /// relative path from root_path to the sosd data blob
+  /// url to the sosd data blob
   #[structopt(long)]
-  keyset_path: String,
+  keyset_url: String,
 
+
+  /* db params */
+
+  /// url to directory with index/db data
+  #[structopt(long)]
+  db_url: String,
   /// index type [dlst, st, btree]
   #[structopt(long)]
   index_type: String,
@@ -114,50 +112,67 @@ pub struct BenchmarkResult<'a> {
 
 /* Experiment scope */
 
+#[derive(Debug)]
 struct Experiment {
-  context: Context,
-  db_meta_path: PathBuf,
+  storage: Rc<RefCell<ExternalStorage>>,
+  sosd_context: Context,
+  db_context: Context,
+  sosd_blob_name: String,
+  keyset_url: Url,
 }
 
 impl Experiment {
   pub fn from(args: &Cli) -> GResult<Experiment> {
-    let mut context = Context::new();
-    context.put_storage({
-      let adaptor = Experiment::load_io(args);
-      &Rc::new(RefCell::new(ExternalStorage::new(adaptor)))
-    });
-    if let Some(path) = PathBuf::from(&args.db_path).parent() {
-      context.storage.as_ref().unwrap()
-        .borrow_mut()
-        .create(path)?;
-    }
-    let db_meta_path = PathBuf::from(format!("{}_meta", args.db_path.clone()));
+    // common external storage
+    let es = Rc::new(RefCell::new(Experiment::load_io(args)?));
+
+    // create data context
+    let sosd_blob_url = Url::parse(&args.sosd_blob_url)?;
+    let mut sosd_context = Context::new();
+    sosd_context.put_storage(&es);
+    sosd_context.put_store_prefix(&sosd_blob_url.join(".")?);
+
+
+    // create data context
+    let db_url = Url::parse(&(args.db_url.clone() + "/"))?;  // enforce directory
+    let mut db_context = Context::new();
+    db_context.put_storage(&es);
+    db_context.put_store_prefix(&db_url);
+
     Ok(Experiment {
-      context,
-      db_meta_path,
+      storage: es,
+      sosd_context,
+      db_context,
+      sosd_blob_name: PathBuf::from(sosd_blob_url.path()).file_name().unwrap().to_str().unwrap().to_string(),
+      keyset_url: Url::parse(&args.keyset_url)?,
     })
   }
 
-  fn load_io(args: &Cli) -> Box<dyn Adaptor> {
-    match args.io.as_str() {
-      "fs" => {  // file system
-        if args.no_cache {
-          Box::new(FileSystemAdaptor::new(&args.root_path)) as Box<dyn Adaptor>
-        } else {
-          Box::new(MmapAdaptor::new(&args.root_path)) as Box<dyn Adaptor>
-        }
-      },
-      "azure" => {  // file system
-        if args.no_cache {
-          let container = args.azure_container.as_ref().expect("Azure IO requires container names");
-          log::warn!("Currently only support benchmarking on the same container");
-          Box::new(AzureContainerAdaptor::new_block(container, &args.root_path)) as Box<dyn Adaptor>
-        } else {
-          panic!("Cache not implemented for Azure IO")
-        }
-      },
-      _ => panic!("Invalid io type \"{}\"", args.io),
+  fn load_io(args: &Cli) -> GResult<ExternalStorage> {
+    let mut es = ExternalStorage::new();
+
+    // file system
+    let fsa = if args.no_cache {
+      Box::new(FileSystemAdaptor::new()) as Box<dyn Adaptor>
+    } else {
+      Box::new(MmapAdaptor::new()) as Box<dyn Adaptor>
+    };
+    es = es.with("file".to_string(), fsa)?;
+
+    // azure storage
+    let aza = if args.no_cache {
+      AzureStorageAdaptor::new_block()
+    } else {
+      log::warn!("Cache not implemented for Azure IO");
+      AzureStorageAdaptor::new_block()
+    };
+    match aza {
+      Ok(aza) => es = es.with("az".to_string(), Box::new(aza))?,
+      Err(e) => log::error!("Failed to initialize azure storage, {:?}", e),
     }
+
+    Ok(es)
+      
   }
 
   pub fn build(&mut self, args: &Cli) -> GResult<()> {
@@ -174,14 +189,17 @@ impl Experiment {
     sosd_db.attach_index(index);
 
     // turn into serializable form
-    let mut new_ctx = Context::new();
-    let meta = sosd_db.to_meta(&mut new_ctx)?;
+    let mut new_data_ctx = Context::new();
+    let mut new_index_ctx = Context::new();
+    let meta = sosd_db.to_meta(&mut new_data_ctx, &mut new_index_ctx)?;
     let meta_bytes = meta::serialize(&meta)?;
+    log::info!("Extracted data_ctx= {:?}", new_data_ctx);
+    log::info!("Extracted index_ctx= {:?}", new_index_ctx);
 
     // write metadata
-    self.context.storage.as_ref().unwrap()
+    self.db_context.storage.as_ref().unwrap()
       .borrow_mut()
-      .write_all(&self.db_meta_path, &meta_bytes)?;
+      .write_all(&self.db_meta()?, &meta_bytes)?;
 
     Ok(())
   }
@@ -195,8 +213,9 @@ impl Experiment {
 
   fn load_blob(&self, args: &Cli) -> GResult<SOSDRankDB> {
     let array_store = ArrayStore::from_exact(
-      self.context.storage.as_ref().unwrap(),
-      PathBuf::from(&args.sosd_blob_path),
+      self.sosd_context.storage.as_ref().unwrap(),
+      self.sosd_context.store_prefix.as_ref().unwrap().clone(),
+      self.sosd_blob_name.clone(),
       match args.sosd_dtype.as_str() {
         "uint32" => 4,
         "uint64" => 8,
@@ -230,7 +249,7 @@ impl Experiment {
     let model_drafter = self.make_drafter(args);
     let index_builder = self.make_index_builder(args, model_drafter, profile);
     let index = index_builder.build_index(data_kps)?;
-    println!("Built index at {}: {:#?}", args.db_path, index);
+    log::info!("Built index at {}: {:#?}", self.db_context.store_prefix.as_ref().unwrap().as_str(), index);
     Ok(index)
   }
 
@@ -266,19 +285,19 @@ impl Experiment {
     match args.index_type.as_str() {
       "dlst" | "st" | "stb" => {
         Box::new(BalanceStackIndexBuilder::new(
-          self.context.storage.as_ref().unwrap(),
+          self.db_context.storage.as_ref().unwrap(),
           model_drafter,
           profile,
-          args.db_path.clone(),
+          self.db_context.store_prefix.as_ref().unwrap().clone(),
         ))
       },
       "btree" => {
         Box::new(BoundedTopStackIndexBuilder::new(
-          self.context.storage.as_ref().unwrap(),
+          self.db_context.storage.as_ref().unwrap(),
           model_drafter,
           profile,
           4096,
-          args.db_path.clone(),
+          self.db_context.store_prefix.as_ref().unwrap().clone(),
         ))
       },
       _ => panic!("Invalid index type \"{}\"", args.index_type),
@@ -302,7 +321,8 @@ impl Experiment {
 
   pub fn benchmark(&self, args: &Cli) -> GResult<(Vec<u128>, Vec<usize>)> {
     // read keyset
-    let test_keyset = read_keyset(args.keyset_path.clone())?;
+    let keyset_bytes = self.storage.borrow_mut().read_all(&self.keyset_url)?;
+    let test_keyset = read_keyset(&keyset_bytes)?;
     let num_samples = match args.num_samples {
       Some(num_samples) => num_samples,
       None => test_keyset.len(),
@@ -338,11 +358,15 @@ impl Experiment {
   }
 
   fn reload(&self) -> GResult<SOSDRankDB> {
-    let meta_bytes = self.context.storage.as_ref().unwrap()
+    let meta_bytes = self.db_context.storage.as_ref().unwrap()
       .borrow_mut()
-      .read_all(&self.db_meta_path)?;
+      .read_all(&self.db_meta()?)?;
     let meta = meta::deserialize(&meta_bytes)?;
-    SOSDRankDB::from_meta(meta, &self.context)
+    SOSDRankDB::from_meta(meta, &self.sosd_context, &self.db_context)
+  }
+
+  fn db_meta(&self) -> GResult<Url> {
+    Ok(self.db_context.store_prefix.as_ref().unwrap().join("metadata")?)
   }
 }
 
@@ -354,21 +378,22 @@ fn main_guarded() -> GResult<()> {
 
   // parse args
   let args = Cli::from_args();
-  println!("{:?}", args);
+  log::info!("{:?}", args);
 
   // create experiment
   let mut exp = Experiment::from(&args)?;
+  log::info!("{:?}", exp);
 
   // build index
   if args.do_build {
     exp.build(&args)?;
-    println!("Built index"); 
+    log::info!("Built index"); 
   }
 
   // run benchmark
   let (time_measures, query_counts) = if args.do_benchmark {
     let (time_measures, query_counts) = exp.benchmark(&args)?;
-    println!("Collected {} measurements", time_measures.len()); 
+    log::info!("Collected {} measurements", time_measures.len()); 
     assert_eq!(time_measures.len(), query_counts.len());
     (time_measures, query_counts)
   } else {
@@ -396,7 +421,7 @@ fn log_result(args: &Cli, time_measures: &[u128], query_counts: &[usize]) -> GRe
     .open(args.out_path.as_str())?;
   log_file.write_all(result_json.as_bytes())?;
   log_file.write_all(b"\n")?;
-  println!("Log result {} characters to {}", result_json.len(), args.out_path.as_str());
+  log::info!("Log result {} characters to {}", result_json.len(), args.out_path.as_str());
 
   Ok(())
 }

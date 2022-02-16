@@ -3,13 +3,12 @@ use rand::Rng;
 use serde::Serialize;
 use std::cell::RefCell;
 use std::rc::Rc;
+use url::Url;
 
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::PathBuf;
 use std::time::Instant;
 use structopt::StructOpt;
-use tempdir::TempDir;
 
 use airindex::common::error::GResult;
 use airindex::io::storage as astorage;
@@ -81,18 +80,21 @@ fn main() -> GResult<()> {
   Ok(())
 }
 
+#[derive(Debug)]
 enum FileContent {
   Zero,
   RandomConstant,
 }
 
+#[derive(Debug)]
 struct FileSpec {
   size: usize,
   content: FileContent,
 }
 
+#[derive(Debug)]
 struct FileDescription {
-  path: PathBuf,
+  url: Url,
   spec: FileSpec,
 }
 
@@ -126,28 +128,31 @@ fn benchmark(args: &Cli) -> GResult<Vec<Vec<u128>>> {
 
 fn benchmark_set(args: &Cli) -> GResult<Vec<u128>> {
   // create storage
-  let temp_dir = TempDir::new_in(&args.root_path, "temp_dir")?;
-  let mfsa = astorage::MmapAdaptor::new(&temp_dir);
-  let es = Rc::new(RefCell::new(astorage::ExternalStorage::new(Box::new(mfsa))));
+  let mfsa = Box::new(astorage::MmapAdaptor::new());
+  let es = Rc::new(RefCell::new(astorage::ExternalStorage::new()
+    .with("file".to_string(), mfsa)?
+  ));
 
   // writes
   let file_descs = benchmark_write(&es, args)?;
-  println!("Wrote files for test at {:?}", temp_dir);
+  println!("Wrote test files {:?}", file_descs);
 
   // reads
-  let time_measures = benchmark_read(&es, args, &file_descs)?;
+  let exp_config = generate_experiment_config(args, &file_descs);
+  let time_measures = benchmark_read(&es, args, &exp_config)?;
 
   // cleanup
-  benchmark_cleanup(file_descs)?;
+  benchmark_cleanup(&es, file_descs)?;
 
   // return benchmark numbers
   Ok(time_measures)
 }
 
 fn benchmark_write(es: &Rc<RefCell<astorage::ExternalStorage>>, args: &Cli) -> GResult<Vec<FileDescription>> {
+  let root_url = Url::parse(&args.root_path).expect("Invalid root_path, expecting url");
   (0..args.num_files).map(|_i| {
     let file_spec = generate_one_writeset(args);
-    write_file_spec(es, file_spec)
+    write_file_spec(es, file_spec, &root_url)
   }).collect()
 }
 
@@ -162,13 +167,14 @@ fn generate_one_writeset(args: &Cli) -> FileSpec {
   }
 }
 
-fn write_file_spec(es: &Rc<RefCell<astorage::ExternalStorage>>, file_spec: FileSpec) -> GResult<FileDescription> {
+fn write_file_spec(es: &Rc<RefCell<astorage::ExternalStorage>>, file_spec: FileSpec, root_url: &Url) -> GResult<FileDescription> {
   // randomize name
   let file_name: String = rand::thread_rng().sample_iter(&Alphanumeric)
     .take(7)
     .map(char::from)
     .collect();
-  let file_path = PathBuf::from("block_".to_owned() + &file_name);
+  let file_path = "block_".to_owned() + &file_name;
+  let file_url = root_url.join(&file_path)?;
 
   // generate content
   let file_content = match file_spec.content {
@@ -181,20 +187,17 @@ fn write_file_spec(es: &Rc<RefCell<astorage::ExternalStorage>>, file_spec: FileS
   // rng.fill(&mut file_content);
 
   // write file
-  es.borrow_mut().write_all(file_path.as_path(), &file_content)?;
+  es.borrow_mut().write_all(&file_url, &file_content)?;
 
   // return with description
-  Ok(FileDescription{path: file_path, spec: file_spec})
+  Ok(FileDescription{url: file_url, spec: file_spec})
 }
 
-fn benchmark_read(es: &Rc<RefCell<astorage::ExternalStorage>>, args: &Cli, file_descs: &[FileDescription]) -> GResult<Vec<u128>> {
-  // make experiment config
-  let exp_config = generate_experiment_config(args, file_descs);
-
+fn benchmark_read(es: &Rc<RefCell<astorage::ExternalStorage>>, args: &Cli, exp_config: &ExperimentConfig) -> GResult<Vec<u128>> {
   // do reading
   (0..args.num_readsets).map(|_i| {
-    let readset = generate_one_readset(&exp_config);
-    read_measure(es, &readset, &exp_config)
+    let readset = generate_one_readset(exp_config);
+    read_measure(es, &readset, exp_config)
   }).collect()
 }
 
@@ -237,7 +240,7 @@ fn generate_one_readset(exp_config: &ExperimentConfig) -> Vec<astorage::ReadRequ
       (0..num_pages).map(|page_idx| {
         let offset = initial_offset + (page_idx as usize) * page_size;
         astorage::ReadRequest::Range{
-          path: file_desc.path.clone(),
+          url: file_desc.url.clone(),
           range: astorage::Range{ offset, length: page_size },
         }
       }).collect::<Vec<_>>()
@@ -253,9 +256,10 @@ fn read_measure(es: &Rc<RefCell<astorage::ExternalStorage>>, read_request: &[ast
   Ok(start_time.elapsed().as_nanos())
 }
 
-fn benchmark_cleanup(_file_descs: Vec<FileDescription>) -> GResult<()> {
-  // nothing to do...
-  // tempdir will automatically remove files
+fn benchmark_cleanup(es: &Rc<RefCell<astorage::ExternalStorage>>, file_descs: Vec<FileDescription>) -> GResult<()> {
+  for file_desc in file_descs {
+    es.borrow_mut().remove(&file_desc.url)?;
+  }
   Ok(())
 }
 

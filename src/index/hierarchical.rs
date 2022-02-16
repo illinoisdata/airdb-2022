@@ -1,6 +1,7 @@
 use serde::{Serialize, Deserialize};
 use std::cell::RefCell;
 use std::rc::Rc;
+use url::Url;
 
 use crate::common::error::GResult;
 use crate::index::Index;
@@ -40,16 +41,16 @@ pub struct BalanceStackIndexBuilder<'a> {
   storage: Rc<RefCell<ExternalStorage>>,
   drafter: Box<dyn ModelDrafter>,
   profile: &'a dyn StorageProfile,
-  prefix_name: String,
+  prefix_url: Url,
 }
 
 impl<'a> BalanceStackIndexBuilder<'a> {
-  pub fn new(storage: &Rc<RefCell<ExternalStorage>>, drafter: Box<dyn ModelDrafter>, profile: &'a dyn StorageProfile, prefix_name: String) -> BalanceStackIndexBuilder<'a> {
+  pub fn new(storage: &Rc<RefCell<ExternalStorage>>, drafter: Box<dyn ModelDrafter>, profile: &'a dyn StorageProfile, prefix_url: Url) -> BalanceStackIndexBuilder<'a> {
     BalanceStackIndexBuilder {
       storage: Rc::clone(storage),
       drafter,
       profile,
-      prefix_name,
+      prefix_url,
     }
   }
 }
@@ -70,7 +71,7 @@ impl<'a> BalanceStackIndexBuilder<'a> {
     if model_draft.cost < no_index_cost {
       // persist
       let data_store = StoreDesigner::new(&self.storage)
-        .design_for_kbs(&model_draft.key_buffers, &self.layer_name(layer_idx));
+        .design_for_kbs(&model_draft.key_buffers, self.prefix_url.clone(), self.layer_name(layer_idx));
       let (piecewise_index, lower_index_kps) = PiecewiseIndex::craft(model_draft, data_store)?;
 
       // try next
@@ -87,7 +88,7 @@ impl<'a> BalanceStackIndexBuilder<'a> {
   }
 
   fn layer_name(&self, layer_idx: usize) -> String {
-    format!("{}_{}", self.prefix_name, layer_idx)
+    format!("layer_{}", layer_idx)
   }
 }
 
@@ -102,17 +103,17 @@ pub struct BoundedTopStackIndexBuilder<'a> {
   drafter: Box<dyn ModelDrafter>,
   profile: &'a dyn StorageProfile,
   top_load: usize,
-  prefix_name: String,
+  prefix_url: Url,
 }
 
 impl<'a> BoundedTopStackIndexBuilder<'a> {
-  pub fn new(storage: &Rc<RefCell<ExternalStorage>>, drafter: Box<dyn ModelDrafter>, profile: &'a dyn StorageProfile, top_load: usize, prefix_name: String) -> BoundedTopStackIndexBuilder<'a> {
+  pub fn new(storage: &Rc<RefCell<ExternalStorage>>, drafter: Box<dyn ModelDrafter>, profile: &'a dyn StorageProfile, top_load: usize, prefix_url: Url) -> BoundedTopStackIndexBuilder<'a> {
     BoundedTopStackIndexBuilder {
       storage: Rc::clone(storage),
       drafter,
       profile,
       top_load,
-      prefix_name,
+      prefix_url,
     }
   }
 }
@@ -130,7 +131,7 @@ impl<'a> BoundedTopStackIndexBuilder<'a> {
 
       // persist
       let data_store = StoreDesigner::new(&self.storage)
-        .design_for_kbs(&model_draft.key_buffers, &self.layer_name(layer_idx));
+        .design_for_kbs(&model_draft.key_buffers, self.prefix_url.clone(), self.layer_name(layer_idx));
       let (piecewise_index, lower_index_kps) = PiecewiseIndex::craft(model_draft, data_store)?;
 
       // try next
@@ -147,7 +148,7 @@ impl<'a> BoundedTopStackIndexBuilder<'a> {
   }
 
   fn layer_name(&self, layer_idx: usize) -> String {
-    format!("{}_{}", self.prefix_name, layer_idx)
+    format!("layer_{}", layer_idx)
   }
 }
 
