@@ -7,10 +7,21 @@ use crate::common::error::GResult;
 use crate::io::storage::ExternalStorage;
 
 
-#[derive(Debug)]
 pub struct Context {
   pub storage: Option<Rc<RefCell<ExternalStorage>>>,
   pub store_prefix: Option<Url>,
+}
+
+impl std::fmt::Debug for Context {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let store_prefix_string = match &self.store_prefix {
+      Some(url) => url.to_string(),
+      None => "None".to_string(),
+    };
+    f.debug_struct("Context")
+      .field("store_prefix", &store_prefix_string)
+      .finish()
+  }
 }
 
 impl Default for Context {

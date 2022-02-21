@@ -259,12 +259,19 @@ pub enum AzureBlobType {  // control only at blob creation time
   PageBlob,  // fast random read/write, basis of azure virtual disk
 }
 
-#[derive(Debug)]
 pub struct AzureStorageAdaptor {
   storage_client: Arc<StorageAccountClient>,
   blob_type: AzureBlobType,
 
   rt: Runtime,  // TODO: move out? static/global variable?
+}
+
+impl std::fmt::Debug for AzureStorageAdaptor {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("AzureStorageAdaptor")
+      .field("blob_type", &self.blob_type)
+      .finish()
+  }
 }
 
 impl AzureStorageAdaptor {

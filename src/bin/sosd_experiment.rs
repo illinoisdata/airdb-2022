@@ -112,13 +112,24 @@ pub struct BenchmarkResult<'a> {
 
 /* Experiment scope */
 
-#[derive(Debug)]
 struct Experiment {
   storage: Rc<RefCell<ExternalStorage>>,
   sosd_context: Context,
   db_context: Context,
   sosd_blob_name: String,
   keyset_url: Url,
+}
+
+impl std::fmt::Debug for Experiment {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("Context")
+      .field("storage", &self.storage)
+      .field("sosd_context", &self.sosd_context)
+      .field("db_context", &self.db_context)
+      .field("sosd_blob_name", &self.sosd_blob_name)
+      .field("keyset_url", &self.keyset_url.to_string())
+      .finish()
+  }
 }
 
 impl Experiment {
