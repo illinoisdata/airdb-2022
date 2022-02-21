@@ -232,11 +232,13 @@ impl ConvexHull {
 /* Serialization */
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct BandModelRecon;
+pub struct BandModelRecon {
+  max_load: Option<PositionT>,
+}
 
 impl BandModelRecon {
   fn new() -> BandModelRecon {
-    BandModelRecon
+    BandModelRecon { max_load: None }
   }
 
   fn sketch(&mut self, bm: &BandModel) -> io::Result<Vec<u8>> {
@@ -264,7 +266,13 @@ impl BandModelRecon {
       width: model_buffer.read_uint::<BigEndian>(POSITION_LENGTH)? as PositionT,
     })
   }
+
+  fn set_max_load(&mut self, max_load: usize) {
+    self.max_load = Some(max_load)
+  }
 }
+
+pub type BandModelReconMeta = BandModelRecon;
 
 impl ModelRecon for BandModelRecon {
   fn reconstruct(&self, buffer: &[u8]) -> GResult<Box<dyn Model>> {
@@ -275,10 +283,15 @@ impl ModelRecon for BandModelRecon {
 
 impl ModelReconMetaserde for BandModelRecon {  // for Metaserde
   fn to_meta(&self, _ctx: &mut Context) -> GResult<ModelReconMeta> {
-    Ok(ModelReconMeta::Band)
+    Ok(ModelReconMeta::Band { meta: self.clone() })
   }
 }
 
+impl BandModelRecon {  // for Metaserde
+  pub fn from_meta(meta: BandModelReconMeta, _ctx: &Context) -> GResult<BandModelRecon> {
+    Ok(meta)
+  }
+}
 
 /* Builder */
 
@@ -389,6 +402,7 @@ impl ModelBuilder for BandConvexHullGreedyBuilder {
     let band = self.hull.make_band();
     let maybe_last_kb = self.generate_segment(band)?;
     
+    self.serde.set_max_load(self.max_load);
     Ok(BuilderFinalReport {
       maybe_model_kb: maybe_last_kb,
       serde: Box::new(self.serde),

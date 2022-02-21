@@ -89,11 +89,13 @@ impl Model for StepModel {
 /* Serialization */
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct StepModelRecon;
+pub struct StepModelRecon {
+  max_load: Option<PositionT>,
+}
 
 impl StepModelRecon {
   fn new() -> StepModelRecon {
-    StepModelRecon
+    StepModelRecon { max_load: None }
   }
 
   fn sketch(&mut self, stm: &StepModel, bundle_size: usize) -> io::Result<Vec<u8>> {
@@ -127,6 +129,10 @@ impl StepModelRecon {
     }
     Ok(stm)
   }
+
+  fn set_max_load(&mut self, max_load: usize) {
+    self.max_load = Some(max_load)
+  }
 }
 
 const ANCHOR_LENGTH: usize = KEY_LENGTH + POSITION_LENGTH;
@@ -143,7 +149,7 @@ pub type StepModelReconMeta = StepModelRecon;
 
 impl ModelReconMetaserde for StepModelRecon {  // for Metaserde
   fn to_meta(&self, _ctx: &mut Context) -> GResult<ModelReconMeta> {
-    Ok(ModelReconMeta::Step)
+    Ok(ModelReconMeta::Step { meta: self.clone() })
   }
 }
 
@@ -233,6 +239,7 @@ impl ModelBuilder for StepGreedyBuilder {
       self.stm.push_kpr(the_cur_kpr);
       self.stm.push_kpr_closing(the_cur_kpr);
     }
+    self.serde.set_max_load(self.max_load);
     Ok(BuilderFinalReport {
       maybe_model_kb: self.generate_segment()?,
       serde: Box::new(self.serde),
