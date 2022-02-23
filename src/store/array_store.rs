@@ -4,10 +4,11 @@ use std::fmt;
 use std::rc::Rc;
 use url::Url;
 
+use crate::common::ArcBytes;
 use crate::common::error::GResult;
 use crate::common::error::IncompleteDataStoreFromMeta;
+use crate::io::internal::ExternalStorage;
 use crate::io::storage::Adaptor;
-use crate::io::storage::ExternalStorage;
 use crate::io::storage::Range;
 use crate::meta::Context;
 use crate::store::DataStore;
@@ -90,7 +91,7 @@ impl ArrayStore {
       self.storage.borrow_mut().write_all(&self.array_url()?, array_buffer)
   }
 
-  fn read_page_range(&self, offset: PositionT, length: PositionT) -> GResult<(Vec<u8>, usize)> {
+  fn read_page_range(&self, offset: PositionT, length: PositionT) -> GResult<(ArcBytes, usize)> {
     // calculate first and last "page" indexes
     let end_offset = offset + length;
     let start_rank = offset / self.state.data_size + (offset % self.state.data_size != 0) as usize;
@@ -209,7 +210,7 @@ impl<'a> DataStoreWriter for ArrayStoreWriter<'a> {
 /* Reader */
 
 pub struct ArrayStoreReader {
-  array_buffer: Vec<u8>,
+  array_buffer: ArcBytes,
   start_rank: usize,
   data_size: usize,
 }
@@ -226,7 +227,7 @@ pub struct ArrayStoreReaderIterWithRank<'a> {
 }
 
 impl ArrayStoreReader {
-  fn new(array_buffer: Vec<u8>, start_rank: usize, data_size: usize) -> ArrayStoreReader {
+  fn new(array_buffer: ArcBytes, start_rank: usize, data_size: usize) -> ArrayStoreReader {
     ArrayStoreReader {
       array_buffer,
       start_rank,

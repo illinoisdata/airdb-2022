@@ -11,8 +11,12 @@ use std::time::Instant;
 use structopt::StructOpt;
 
 use airindex::common::error::GResult;
-use airindex::io::storage as astorage;
+use airindex::io::internal::ExternalStorage;
 use airindex::io::storage::Adaptor;
+use airindex::io::storage::FileSystemAdaptor;
+use airindex::io::storage::Range;
+use airindex::io::storage::ReadRequest;
+
 
 #[derive(Debug, Serialize, StructOpt)]
 pub struct Cli {
@@ -128,9 +132,9 @@ fn benchmark(args: &Cli) -> GResult<Vec<Vec<u128>>> {
 
 fn benchmark_set(args: &Cli) -> GResult<Vec<u128>> {
   // create storage
-  let mfsa = Box::new(astorage::MmapAdaptor::new());
-  let es = Rc::new(RefCell::new(astorage::ExternalStorage::new()
-    .with("file".to_string(), mfsa)?
+  let fsa = Box::new(FileSystemAdaptor::new());
+  let es = Rc::new(RefCell::new(ExternalStorage::new()
+    .with("file".to_string(), fsa)?
   ));
 
   // writes
@@ -148,7 +152,7 @@ fn benchmark_set(args: &Cli) -> GResult<Vec<u128>> {
   Ok(time_measures)
 }
 
-fn benchmark_write(es: &Rc<RefCell<astorage::ExternalStorage>>, args: &Cli) -> GResult<Vec<FileDescription>> {
+fn benchmark_write(es: &Rc<RefCell<ExternalStorage>>, args: &Cli) -> GResult<Vec<FileDescription>> {
   let root_url = Url::parse(&args.root_path).expect("Invalid root_path, expecting url");
   (0..args.num_files).map(|_i| {
     let file_spec = generate_one_writeset(args);
@@ -167,7 +171,7 @@ fn generate_one_writeset(args: &Cli) -> FileSpec {
   }
 }
 
-fn write_file_spec(es: &Rc<RefCell<astorage::ExternalStorage>>, file_spec: FileSpec, root_url: &Url) -> GResult<FileDescription> {
+fn write_file_spec(es: &Rc<RefCell<ExternalStorage>>, file_spec: FileSpec, root_url: &Url) -> GResult<FileDescription> {
   // randomize name
   let file_name: String = rand::thread_rng().sample_iter(&Alphanumeric)
     .take(7)
@@ -193,7 +197,7 @@ fn write_file_spec(es: &Rc<RefCell<astorage::ExternalStorage>>, file_spec: FileS
   Ok(FileDescription{url: file_url, spec: file_spec})
 }
 
-fn benchmark_read(es: &Rc<RefCell<astorage::ExternalStorage>>, args: &Cli, exp_config: &ExperimentConfig) -> GResult<Vec<u128>> {
+fn benchmark_read(es: &Rc<RefCell<ExternalStorage>>, args: &Cli, exp_config: &ExperimentConfig) -> GResult<Vec<u128>> {
   // do reading
   (0..args.num_readsets).map(|_i| {
     let readset = generate_one_readset(exp_config);
@@ -221,7 +225,7 @@ fn generate_experiment_config<'a>(args: &Cli, file_descs: &'a [FileDescription])
   }
 }
 
-fn generate_one_readset(exp_config: &ExperimentConfig) -> Vec<astorage::ReadRequest>  {
+fn generate_one_readset(exp_config: &ExperimentConfig) -> Vec<ReadRequest>  {
   let mut rng = rand::thread_rng();
 
   // select one file
@@ -239,16 +243,16 @@ fn generate_one_readset(exp_config: &ExperimentConfig) -> Vec<astorage::ReadRequ
       let initial_offset = rng.gen_range(0..last_offset+1);
       (0..num_pages).map(|page_idx| {
         let offset = initial_offset + (page_idx as usize) * page_size;
-        astorage::ReadRequest::Range{
+        ReadRequest::Range{
           url: file_desc.url.clone(),
-          range: astorage::Range{ offset, length: page_size },
+          range: Range{ offset, length: page_size },
         }
       }).collect::<Vec<_>>()
     }
   }
 }
 
-fn read_measure(es: &Rc<RefCell<astorage::ExternalStorage>>, read_request: &[astorage::ReadRequest], exp_config: &ExperimentConfig) -> GResult<u128> {
+fn read_measure(es: &Rc<RefCell<ExternalStorage>>, read_request: &[ReadRequest], exp_config: &ExperimentConfig) -> GResult<u128> {
   let start_time = Instant::now();
   match exp_config.read_method {
     ReadMethod::BatchSequential => es.borrow_mut().read_batch_sequential(read_request)?,
@@ -256,7 +260,7 @@ fn read_measure(es: &Rc<RefCell<astorage::ExternalStorage>>, read_request: &[ast
   Ok(start_time.elapsed().as_nanos())
 }
 
-fn benchmark_cleanup(es: &Rc<RefCell<astorage::ExternalStorage>>, file_descs: Vec<FileDescription>) -> GResult<()> {
+fn benchmark_cleanup(es: &Rc<RefCell<ExternalStorage>>, file_descs: Vec<FileDescription>) -> GResult<()> {
   for file_desc in file_descs {
     es.borrow_mut().remove(&file_desc.url)?;
   }

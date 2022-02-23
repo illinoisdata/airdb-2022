@@ -40,7 +40,7 @@ fn main() -> GResult<()> {
 
   // create adaptor
   log::info!("Creating azure adpator");
-  let mut adaptor = AzureStorageAdaptor::new_block()?;
+  let adaptor = AzureStorageAdaptor::new_block()?;
   let test_path = format!("az:///{}/{}", &args.container, &args.blob_prefix);
   let test_url = Url::parse(&test_path)?;
 
@@ -72,7 +72,7 @@ fn main() -> GResult<()> {
 
   // read blob range from different adpator
   log::info!("Reading blob in range with a new adaptor");
-  let mut adaptor2 = AzureStorageAdaptor::new_block()?;
+  let adaptor2 = AzureStorageAdaptor::new_block()?;
   {
     let range = Range { offset: 512, length: 1024 };
     let blob = adaptor2.read_range(&test_url.join(&args.blob_name)?, &range)?;

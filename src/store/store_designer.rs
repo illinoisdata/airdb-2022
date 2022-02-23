@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use url::Url;
 
-use crate::io::storage::ExternalStorage;
+use crate::io::internal::ExternalStorage;
 use crate::store::array_store::ArrayStore;
 use crate::store::block_store::BlockStore;
 use crate::store::DataStore;

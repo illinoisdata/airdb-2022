@@ -5,9 +5,9 @@ use structopt::StructOpt;
 
 use airindex::common::error::GResult;
 use airindex::db::key_rank::SOSDRankDB;
-use airindex::io::storage::ExternalStorage;
-use airindex::io::storage::MmapAdaptor;
-use airindex::io::storage::url_from_dir_str;
+use airindex::io::internal::ExternalStorage;
+use airindex::io::storage::FileSystemAdaptor;
+use airindex::io::storage::url_from_dir_path;
 use airindex::store::array_store::ArrayStore;
 use airindex::store::key_position::KeyPositionCollection;
 
@@ -56,9 +56,9 @@ fn main() -> GResult<()> {
 
 fn load_sosd(args: &Cli) -> GResult<SOSDRankDB> {
   // prepare storage interface
-  let root_url = url_from_dir_str("./")?;
-  let mfsa = Box::new(MmapAdaptor::new());
-  let es = Rc::new(RefCell::new(ExternalStorage::new().with("file".to_string(), mfsa)?));
+  let root_url = url_from_dir_path(&std::env::current_dir()?)?;
+  let fsa = Box::new(FileSystemAdaptor::new());
+  let es = Rc::new(RefCell::new(ExternalStorage::new().with("file".to_string(), fsa)?));
 
   let array_store = ArrayStore::from_exact(
     &es,

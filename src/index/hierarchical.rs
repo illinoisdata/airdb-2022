@@ -13,7 +13,7 @@ use crate::index::PartialIndex;
 use crate::index::PartialIndexMeta;
 use crate::index::piecewise::PiecewiseIndex;
 use crate::io::profile::StorageProfile;
-use crate::io::storage::ExternalStorage;
+use crate::io::internal::ExternalStorage;
 use crate::meta::Context;
 use crate::model::ModelDrafter;
 use crate::store::key_position::KeyPositionCollection;

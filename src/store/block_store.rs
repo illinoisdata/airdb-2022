@@ -6,8 +6,8 @@ use url::Url;
 
 use crate::common::error::GResult;
 use crate::common::error::IncompleteDataStoreFromMeta;
+use crate::io::internal::ExternalStorage;
 use crate::io::storage::Adaptor;
-use crate::io::storage::ExternalStorage;
 use crate::io::storage::Range;
 use crate::io::storage::ReadRequest;
 use crate::meta::Context;

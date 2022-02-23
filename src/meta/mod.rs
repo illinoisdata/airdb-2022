@@ -4,7 +4,7 @@ use std::rc::Rc;
 use url::Url;
 
 use crate::common::error::GResult;
-use crate::io::storage::ExternalStorage;
+use crate::io::internal::ExternalStorage;
 
 
 pub struct Context {

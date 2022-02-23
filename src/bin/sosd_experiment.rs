@@ -15,15 +15,14 @@ use airindex::index::hierarchical::BalanceStackIndexBuilder;
 use airindex::index::hierarchical::BoundedTopStackIndexBuilder;
 use airindex::index::Index;
 use airindex::index::IndexBuilder;
+use airindex::io::internal::ExternalStorage;
 use airindex::io::profile::AffineStorageProfile;
 use airindex::io::profile::Bandwidth;
 use airindex::io::profile::Latency;
 use airindex::io::profile::StorageProfile;
 use airindex::io::storage::Adaptor;
 use airindex::io::storage::AzureStorageAdaptor;
-use airindex::io::storage::ExternalStorage;
 use airindex::io::storage::FileSystemAdaptor;
-use airindex::io::storage::MmapAdaptor;
 use airindex::meta::Context;
 use airindex::meta;
 use airindex::model::ModelDrafter;
@@ -159,24 +158,26 @@ impl Experiment {
     })
   }
 
-  fn load_io(args: &Cli) -> GResult<ExternalStorage> {
+  fn load_io(_args: &Cli) -> GResult<ExternalStorage> {
     let mut es = ExternalStorage::new();
 
     // file system
-    let fsa = if args.no_cache {
-      Box::new(FileSystemAdaptor::new()) as Box<dyn Adaptor>
-    } else {
-      Box::new(MmapAdaptor::new()) as Box<dyn Adaptor>
-    };
+    let fsa = Box::new(FileSystemAdaptor::new()) as Box<dyn Adaptor>;
+    // let fsa = if args.no_cache {
+    //   Box::new(FileSystemAdaptor::new()) as Box<dyn Adaptor>
+    // } else {
+    //   Box::new(MmapAdaptor::new()) as Box<dyn Adaptor>
+    // };
     es = es.with("file".to_string(), fsa)?;
 
     // azure storage
-    let aza = if args.no_cache {
-      AzureStorageAdaptor::new_block()
-    } else {
-      log::warn!("Cache not implemented for Azure IO");
-      AzureStorageAdaptor::new_block()
-    };
+    let aza = AzureStorageAdaptor::new_block();
+    // let aza = if args.no_cache {
+    //   AzureStorageAdaptor::new_block()
+    // } else {
+    //   log::warn!("Cache not implemented for Azure IO");
+    //   AzureStorageAdaptor::new_block()
+    // };
     match aza {
       Ok(aza) => es = es.with("az".to_string(), Box::new(aza))?,
       Err(e) => log::error!("Failed to initialize azure storage, {:?}", e),

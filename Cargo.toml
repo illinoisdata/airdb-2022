@@ -26,6 +26,7 @@ futures = "0.3.21"
 itertools = "0.10.3"
 log = "0.4.14"
 memmap2 = "0.5.2"
+moka = "0.7.2"
 num = "0.4.0"
 openssl = { version = "0.10.38", features = ["vendored"] }
 rand = "0.8.3"
