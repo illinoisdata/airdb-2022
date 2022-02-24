@@ -88,7 +88,7 @@ impl ArrayStore {
   }
 
   fn write_array(&self, array_buffer: &[u8]) -> GResult<()> {
-      self.storage.borrow_mut().write_all(&self.array_url()?, array_buffer)
+      self.storage.borrow().write_all(&self.array_url()?, array_buffer)
   }
 
   fn read_page_range(&self, offset: PositionT, length: PositionT) -> GResult<(ArcBytes, usize)> {
@@ -98,7 +98,7 @@ impl ArrayStore {
     let end_rank = std::cmp::min(end_offset / self.state.data_size, self.state.length);
 
     // make read requests
-    let array_buffer = self.storage.borrow_mut().read_range(
+    let array_buffer = self.storage.borrow().read_range(
       &self.array_url()?,
       &Range{
         offset: start_rank * self.state.data_size + self.state.offset,
@@ -129,6 +129,10 @@ impl DataStore for ArrayStore {
     // read and extract dbuffer than completely fits in the range 
     let (array_buffer, start_rank) = self.read_page_range(offset, length)?;
     Ok(Box::new(ArrayStoreReader::new(array_buffer, start_rank, self.state.data_size)))
+  }
+
+  fn relevant_paths(&self) -> GResult<Vec<String>> {
+    Ok(vec![self.state.array_name.clone()])
   }
 }
 

@@ -12,10 +12,12 @@ use crate::index::naive::NaiveIndex;
 use crate::index::PartialIndex;
 use crate::index::PartialIndexMeta;
 use crate::index::piecewise::PiecewiseIndex;
-use crate::io::profile::StorageProfile;
+use crate::index::stash::StashIndex;
 use crate::io::internal::ExternalStorage;
+use crate::io::profile::StorageProfile;
 use crate::meta::Context;
 use crate::model::ModelDrafter;
+use crate::store::DataStore;
 use crate::store::key_position::KeyPositionCollection;
 use crate::store::key_position::KeyPositionRange;
 use crate::store::key_position::KeyT;
@@ -60,6 +62,7 @@ impl<'a> BalanceStackIndexBuilder<'a> {
     &self,
     kps: &KeyPositionCollection,
     layer_idx: usize,
+    lower_data_store: Option<&dyn DataStore>,
   ) -> GResult<Box<dyn Index>> {
     // if no index is built
     let no_index_cost = self.profile.cost(kps.total_bytes());
@@ -75,15 +78,20 @@ impl<'a> BalanceStackIndexBuilder<'a> {
       let (piecewise_index, lower_index_kps) = PiecewiseIndex::craft(model_draft, data_store)?;
 
       // try next
-      let upper_index = self.bns_at_layer(&lower_index_kps, layer_idx + 1)?;
+      let upper_index = self.bns_at_layer(
+        &lower_index_kps,
+        layer_idx + 1,
+        Some(piecewise_index.borrow_data_store()),
+      )?;
       let lower_index = Box::new(piecewise_index) as Box<dyn PartialIndex>;
       Ok(Box::new(StackIndex {
         upper_index,
         lower_index
       }))
     } else {
-      // fetching whole data layer is faster than building index
-      Ok(Box::new(NaiveIndex::build(kps)))
+      // // fetching whole data layer is faster than building index
+      // Ok(Box::new(NaiveIndex::build(kps)))
+      Ok(Box::new(StashIndex::build(kps, lower_data_store, &self.storage, &self.prefix_url)?))
     }
   }
 
@@ -94,7 +102,7 @@ impl<'a> BalanceStackIndexBuilder<'a> {
 
 impl<'a> IndexBuilder for BalanceStackIndexBuilder<'a> {
   fn build_index(&self, kps: &KeyPositionCollection) -> GResult<Box<dyn Index>> {
-    self.bns_at_layer(kps, 1)
+    self.bns_at_layer(kps, 1, None)
   }
 }
 

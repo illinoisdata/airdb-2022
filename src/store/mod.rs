@@ -11,6 +11,7 @@ pub trait DataStore: DataStoreMetaserde + Debug {
   fn begin_write(&mut self) -> GResult<Box<dyn DataStoreWriter + '_>>;
   fn read_all(&self) -> GResult<Box<dyn DataStoreReader>>;
   fn read_within(&self, offset: PositionT, length: PositionT) -> GResult<Box<dyn DataStoreReader>>;
+  fn relevant_paths(&self) -> GResult<Vec<String>>;
 }
 
 pub trait DataStoreWriter {

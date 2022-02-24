@@ -210,7 +210,7 @@ impl Experiment {
 
     // write metadata
     self.db_context.storage.as_ref().unwrap()
-      .borrow_mut()
+      .borrow()
       .write_all(&self.db_meta()?, &meta_bytes)?;
 
     Ok(())
@@ -333,7 +333,7 @@ impl Experiment {
 
   pub fn benchmark(&self, args: &Cli) -> GResult<(Vec<u128>, Vec<usize>)> {
     // read keyset
-    let keyset_bytes = self.storage.borrow_mut().read_all(&self.keyset_url)?;
+    let keyset_bytes = self.storage.borrow().read_all(&self.keyset_url)?;
     let test_keyset = read_keyset(&keyset_bytes)?;
     let num_samples = match args.num_samples {
       Some(num_samples) => num_samples,
@@ -371,7 +371,7 @@ impl Experiment {
 
   fn reload(&self) -> GResult<SOSDRankDB> {
     let meta_bytes = self.db_context.storage.as_ref().unwrap()
-      .borrow_mut()
+      .borrow()
       .read_all(&self.db_meta()?)?;
     let meta = meta::deserialize(&meta_bytes)?;
     SOSDRankDB::from_meta(meta, &self.sosd_context, &self.db_context)

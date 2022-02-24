@@ -45,6 +45,10 @@ pub struct PiecewiseIndex {
 }
 
 impl PiecewiseIndex {
+  pub fn borrow_data_store(&self) -> &dyn DataStore {
+    self.data_store.as_ref()
+  }
+
   fn predict_from_reader(&self, reader: Box<dyn DataStoreReader>, key: &KeyT) -> GResult<KeyPositionRange> {
     let model_kb = PiecewiseIndex::select_relevant_kb(reader, key)?;
     let model = self.model_serde.reconstruct(&model_kb.buffer)?;
@@ -66,7 +70,7 @@ impl PiecewiseIndex {
 impl Index for PiecewiseIndex {
   fn predict(&self, key: &KeyT) -> GResult<KeyPositionRange> {
     let reader = self.data_store.read_all()?;
-    log::debug!("received piecewise buffer");  // TEMP
+    log::trace!("Received piecewise buffer");  // TEMP
     self.predict_from_reader(reader, key)
   }
 }
@@ -74,7 +78,7 @@ impl Index for PiecewiseIndex {
 impl PartialIndex for PiecewiseIndex {
   fn predict_within(&self, kr: &KeyPositionRange) -> GResult<KeyPositionRange> {
     let reader = self.data_store.read_within(kr.offset, kr.length)?;
-    log::debug!("received piecewise buffer, partial {:?}", kr);  // TEMP
+    log::trace!("Received piecewise buffer, partial {:?}", kr);  // TEMP
     self.predict_from_reader(reader, &kr.key_l)
   }
 }

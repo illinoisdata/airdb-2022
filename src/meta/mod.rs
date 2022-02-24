@@ -60,14 +60,14 @@ impl Context {
 }
 
 
-// default serializer, for convenience (JSON)
-pub fn serialize<T: Serialize>(meta: &T) -> GResult<Vec<u8>> {
-  Ok(serde_json::to_vec(meta)?)
-}
+// // default serializer, for convenience (JSON)
+// pub fn serialize<T: Serialize>(meta: &T) -> GResult<Vec<u8>> {
+//   Ok(serde_json::to_vec(meta)?)
+// }
 
-pub fn deserialize<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> GResult<T> {
-  Ok(serde_json::from_slice(bytes)?)
-}
+// pub fn deserialize<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> GResult<T> {
+//   Ok(serde_json::from_slice(bytes)?)
+// }
 
 
 // // default serializer, for convenience (BSON)
@@ -78,6 +78,16 @@ pub fn deserialize<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> GResult<T> {
 // pub fn deserialize<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> GResult<T> {
 //   Ok(bson::from_slice(bytes)?)
 // }
+
+
+// default serializer, for convenience (Postcard)
+pub fn serialize<T: Serialize>(meta: &T) -> GResult<Vec<u8>> {
+  Ok(postcard::to_stdvec(meta)?)
+}
+
+pub fn deserialize<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> GResult<T> {
+  Ok(postcard::from_bytes(bytes)?)
+}
 
 
 /* Serializable to Metadata */

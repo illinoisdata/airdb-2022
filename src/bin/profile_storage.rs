@@ -191,7 +191,7 @@ fn write_file_spec(es: &Rc<RefCell<ExternalStorage>>, file_spec: FileSpec, root_
   // rng.fill(&mut file_content);
 
   // write file
-  es.borrow_mut().write_all(&file_url, &file_content)?;
+  es.borrow().write_all(&file_url, &file_content)?;
 
   // return with description
   Ok(FileDescription{url: file_url, spec: file_spec})
@@ -255,14 +255,14 @@ fn generate_one_readset(exp_config: &ExperimentConfig) -> Vec<ReadRequest>  {
 fn read_measure(es: &Rc<RefCell<ExternalStorage>>, read_request: &[ReadRequest], exp_config: &ExperimentConfig) -> GResult<u128> {
   let start_time = Instant::now();
   match exp_config.read_method {
-    ReadMethod::BatchSequential => es.borrow_mut().read_batch_sequential(read_request)?,
+    ReadMethod::BatchSequential => es.borrow().read_batch_sequential(read_request)?,
   };
   Ok(start_time.elapsed().as_nanos())
 }
 
 fn benchmark_cleanup(es: &Rc<RefCell<ExternalStorage>>, file_descs: Vec<FileDescription>) -> GResult<()> {
   for file_desc in file_descs {
-    es.borrow_mut().remove(&file_desc.url)?;
+    es.borrow().remove(&file_desc.url)?;
   }
   Ok(())
 }

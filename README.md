@@ -27,16 +27,15 @@ Learned index on external memory model for key-value data
 - [x] Meta-serializable structs
 - [x] Rank DB
 - [ ] Key-value DB with writing
-- [ ] Azure connector
+- [x] Azure connector
 
 ## Optimization List
 
 - [ ] Async IO
 - [ ] Zero-copy block store reads
 - [x] IO buffer pool (or mmap)
-  - [ ] IO buffer pool explicit
-- [ ] Fixed-size bundling of linear functions
-- [ ] Root layer in metadata
+  - [x] IO buffer pool explicit
+- [x] Root layer in metadata
 
 ## Refactoring List
 

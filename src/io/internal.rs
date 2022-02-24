@@ -75,7 +75,7 @@ impl ExternalStorage {
     Ok(())
   }
 
-  pub fn read_batch_sequential(&mut self, requests: &[ReadRequest]) -> GResult<Vec<ArcBytes>> {
+  pub fn read_batch_sequential(&self, requests: &[ReadRequest]) -> GResult<Vec<ArcBytes>> {
     // TODO: async this
     requests.par_iter().map(|request| self.read(request)).collect()
   }
@@ -87,11 +87,29 @@ impl ExternalStorage {
       None => Err(UnavailableStorageScheme::boxed(scheme, self.schemes.clone())),
     }
   }
+}
+
+// cache-related logics
+impl ExternalStorage {
+
+  pub fn warm_cache(&self, url: &Url, url_buffer: &ArcBytes) {
+    assert!(url.query().is_none());
+    let buffer_range = Range { offset: 0, length: url_buffer.len()};
+    self.range_to_pages(&buffer_range)
+      // .into_par_iter()
+      .for_each(|page_idx| {
+        let paged_url = self.paged_url(url.clone(), page_idx);
+        let page_range = self.page_to_range(page_idx);
+        let page_offset_r = std::cmp::min(buffer_range.length, page_range.offset + page_range.length);
+        let page_bytes = url_buffer[page_range.offset .. page_offset_r].to_vec();
+        self.page_cache.insert(paged_url, Arc::from(page_bytes))
+      });
+    log::info!("Warmed up cache for {:?}", url.to_string());
+  }
 
   fn read_through_page(&self, url: &Url, page_idx: usize) -> GResult<ArcBytes> {
     // make url with page idx
-    let mut paged_url = url.clone();
-    paged_url.set_query(Some(&format!("page={}", page_idx)));
+    let paged_url = self.paged_url(url.clone(), page_idx);
 
     // check in cache
     if let Some(page_bytes) = self.page_cache.get(&paged_url) {
@@ -99,6 +117,7 @@ impl ExternalStorage {
       Ok(page_bytes)
     } else {
       // cache miss... fetch from adaptor
+      log::debug!("Cache missed {:?}", paged_url.to_string());
       let page_range = self.page_to_range(page_idx);
       let page_bytes = self.select_adaptor(url)?.read_range(url, &page_range)?;
       self.page_cache.insert(paged_url, page_bytes.clone());  // cheap clone of Arc
@@ -116,6 +135,11 @@ impl ExternalStorage {
 
   fn page_to_range(&self, page_idx: usize) -> Range {
     Range { offset: page_idx * self.page_size, length: self.page_size }
+  }
+
+  fn paged_url(&self, mut url: Url, page_idx: usize) -> Url {
+    url.set_query(Some(&format!("page={}", page_idx)));
+    url
   }
 }
 
@@ -243,7 +267,7 @@ mod tests {
   fn es_read_batch_sequential() -> GResult<()> {
     let (temp_dir, fsa) = fsa_tempdir_setup()?;
     let temp_dir_url = &url_from_dir_path(temp_dir.path())?;
-    let mut es = ExternalStorage::new_with_cache(65536, 17).with("file".to_string(), Box::new(fsa))?;
+    let es = ExternalStorage::new_with_cache(65536, 17).with("file".to_string(), Box::new(fsa))?;
 
     // write some data
     let test_path = temp_dir_url.join("test.bin")?;
