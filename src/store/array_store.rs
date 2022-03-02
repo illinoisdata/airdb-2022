@@ -152,11 +152,13 @@ impl ArrayStore {  // for Metaserde
   pub fn from_meta(meta: ArrayStoreState, ctx: &Context) -> GResult<ArrayStore> {
     let storage = Rc::clone(ctx.storage.as_ref().expect("ArrayStore requires storage context"));
     let store_prefix = ctx.store_prefix.as_ref().ok_or_else(|| IncompleteDataStoreFromMeta::boxed("ArrayStore requires store prefix url"))?;
-    Ok(ArrayStore{
+    let array_store = ArrayStore {
       storage,
       prefix_url: store_prefix.clone(),
       state: meta
-    })
+    };
+    // array_store.read_all()?;
+    Ok(array_store)
   }
 }
 
