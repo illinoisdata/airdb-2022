@@ -24,4 +24,3 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           args: --all-features
-          working-directory: ${{env.working-directory}}
