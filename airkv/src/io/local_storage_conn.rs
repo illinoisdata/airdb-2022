@@ -32,7 +32,7 @@ lazy_static! {
     2. LocalStorageConnector.open() will get the sender side of the message-passing channel for its client. LocalStorageConnector.LocalStorageConnector.append() called by multiple clients are orchestrated by the message-passing channel which has multiple senders (multi-producer) and one receiver(single-consumer). Each client has one instance of LocalStorageConnector. Therefore,each client holds one sender and many threads(clients) can send simultaneously to one receiver.
 
     Usage Example(for each client):
-    
+
     // create its own instance of LocalStorageConnector
     let local_connector = LocalStorageConnector::default();
     // call LocalStorageConnector.open() to trigger the backend consumer thread and get the sender side for message-passing
@@ -64,6 +64,7 @@ impl StorageConnector for LocalStorageConnector {
 
     // close connection and clear states
     fn close(&mut self) -> GResult<()> {
+        self.writer = None;
         Ok(())
     }
 
