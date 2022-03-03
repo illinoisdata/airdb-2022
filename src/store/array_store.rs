@@ -5,8 +5,10 @@ use std::rc::Rc;
 use url::Url;
 
 use crate::common::ArcBytes;
+use crate::common::error::GenericError;
 use crate::common::error::GResult;
 use crate::common::error::IncompleteDataStoreFromMeta;
+use crate::common::error::OutofCoverageError;
 use crate::io::internal::ExternalStorage;
 use crate::io::storage::Adaptor;
 use crate::io::storage::Range;
@@ -20,6 +22,7 @@ use crate::store::DataStoreWriter;
 use crate::store::key_buffer::KeyBuffer;
 use crate::store::key_position::KeyPositionCollection;
 use crate::store::key_position::PositionT;
+use crate::store::KeyT;
 
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -35,6 +38,7 @@ pub struct ArrayStore {
   storage: Rc<RefCell<ExternalStorage>>,
   prefix_url: Url,
   state: ArrayStoreState,
+  array_url: Url,
 }
 
 impl fmt::Debug for ArrayStore {
@@ -45,6 +49,7 @@ impl fmt::Debug for ArrayStore {
 
 impl ArrayStore {
   pub fn new_sized(storage: &Rc<RefCell<ExternalStorage>>, prefix_url: Url, array_name: String, data_size: usize) -> ArrayStore {
+    let array_url = ArrayStore::array_url(&prefix_url, &array_name);
     ArrayStore{
       storage: Rc::clone(storage),
       prefix_url,
@@ -54,9 +59,11 @@ impl ArrayStore {
         offset: 0,
         length: 0,
       },
+      array_url,
     }
   }
   pub fn from_exact(storage: &Rc<RefCell<ExternalStorage>>, prefix_url: Url, array_name: String, data_size: usize, offset: usize, length: usize) -> ArrayStore {
+    let array_url = ArrayStore::array_url(&prefix_url, &array_name);
     ArrayStore{
       storage: Rc::clone(storage),
       prefix_url,
@@ -66,6 +73,7 @@ impl ArrayStore {
         offset,
         length,
       },
+      array_url,
     }
   }
 
@@ -88,7 +96,7 @@ impl ArrayStore {
   }
 
   fn write_array(&self, array_buffer: &[u8]) -> GResult<()> {
-      self.storage.borrow().write_all(&self.array_url()?, array_buffer)
+      self.storage.borrow().write_all(&self.array_url, array_buffer)
   }
 
   fn read_page_range(&self, offset: PositionT, length: PositionT) -> GResult<(ArcBytes, usize)> {
@@ -99,7 +107,7 @@ impl ArrayStore {
 
     // make read requests
     let array_buffer = self.storage.borrow().read_range(
-      &self.array_url()?,
+      &self.array_url,
       &Range{
         offset: start_rank * self.state.data_size + self.state.offset,
         length: (end_rank - start_rank) * self.state.data_size
@@ -108,8 +116,8 @@ impl ArrayStore {
     Ok((array_buffer, start_rank))
   }
 
-  fn array_url(&self) -> GResult<Url> {
-    Ok(self.prefix_url.join(&self.state.array_name)?)
+  fn array_url(prefix_url: &Url, array_name: &str) -> Url {
+    prefix_url.join(array_name).unwrap()
   }
 }
 
@@ -152,10 +160,13 @@ impl ArrayStore {  // for Metaserde
   pub fn from_meta(meta: ArrayStoreState, ctx: &Context) -> GResult<ArrayStore> {
     let storage = Rc::clone(ctx.storage.as_ref().expect("ArrayStore requires storage context"));
     let store_prefix = ctx.store_prefix.as_ref().ok_or_else(|| IncompleteDataStoreFromMeta::boxed("ArrayStore requires store prefix url"))?;
+    let prefix_url = store_prefix.clone();
+    let array_url = ArrayStore::array_url(&prefix_url, &meta.array_name);
     let array_store = ArrayStore {
       storage,
-      prefix_url: store_prefix.clone(),
-      state: meta
+      prefix_url,
+      state: meta,
+      array_url,
     };
     // array_store.read_all()?;
     Ok(array_store)
@@ -244,11 +255,44 @@ impl ArrayStoreReader {
   pub fn iter_with_rank(&self) -> ArrayStoreReaderIterWithRank {
     ArrayStoreReaderIterWithRank{ r: self, rank: self.start_rank, current_offset: 0 }
   }
+
+  pub fn key_at(&self, idx: usize) -> KeyT {
+    let offset = idx * self.data_size;
+    KeyBuffer::deserialize_key(&self.array_buffer[offset .. offset + self.data_size])
+  }
+
+  pub fn kb_at(&self, idx: usize) -> KeyBuffer {
+    let offset = idx * self.data_size;
+    KeyBuffer::deserialize(&self.array_buffer[offset .. offset + self.data_size])
+  }
 }
 
 impl DataStoreReader for ArrayStoreReader {
   fn iter(&self) -> Box<dyn DataStoreReaderIter + '_> {
     Box::new(ArrayStoreReaderIter{ r: self, current_offset: 0 })
+  }
+
+  fn first_of(&self, key: KeyT) -> GResult<KeyBuffer> {
+    // binary search
+    assert!(self.array_buffer.len() % self.data_size == 0);
+    let mut l = 0;
+    let mut r = self.array_buffer.len() / self.data_size - 1;
+    while l < r {
+      let mid = (l + r + 1) / 2;
+      let mid_key = self.key_at(mid);
+      match mid_key.cmp(&key) {
+          std::cmp::Ordering::Less => { l = mid },
+          std::cmp::Ordering::Equal => { l = mid },
+          std::cmp::Ordering::Greater => { r = mid - 1 },
+      }
+    }
+    if l < self.array_buffer.len() / self.data_size {
+      let kb = self.kb_at(l);
+      if kb.key <= key {
+        return Ok(kb);
+      }
+    }
+    Err(Box::new(OutofCoverageError) as GenericError)
   }
 }
 

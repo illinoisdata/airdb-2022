@@ -35,7 +35,7 @@ pub struct Cli {
 }
 
 
-fn main() -> GResult<()> {
+fn main_guarded() -> GResult<()> {
   // execution init
   env_logger::init();
 
@@ -86,4 +86,8 @@ fn observe_kps(kps: &KeyPositionCollection, num_print_kps: usize) {
     println!("\t{}: {:?}", idx * step, kps[idx * step]);
   }
   println!("Length= {}, where last kp: {:?}", kps.len(), kps[kps.len() - 1]);
+}
+
+fn main() {
+  main_guarded().expect("Error occur during sosd keyset generation");
 }

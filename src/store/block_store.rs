@@ -4,8 +4,10 @@ use std::fmt;
 use std::rc::Rc;
 use url::Url;
 
+use crate::common::error::GenericError;
 use crate::common::error::GResult;
 use crate::common::error::IncompleteDataStoreFromMeta;
+use crate::common::error::OutofCoverageError;
 use crate::io::internal::ExternalStorage;
 use crate::io::storage::Adaptor;
 use crate::io::storage::Range;
@@ -17,6 +19,7 @@ use crate::store::DataStoreMetaserde;
 use crate::store::DataStoreReader;
 use crate::store::DataStoreReaderIter;
 use crate::store::DataStoreWriter;
+use crate::store::KeyT;
 use crate::store::key_buffer::KeyBuffer;
 use crate::store::key_position::KeyPositionCollection;
 use crate::store::key_position::PositionT;
@@ -375,6 +378,13 @@ impl BlockStoreReader {
 impl DataStoreReader for BlockStoreReader {
   fn iter(&self) -> Box<dyn DataStoreReaderIter + '_> {
     Box::new(BlockStoreReaderIter{ r: self, chunk_idx: self.chunk_idx_first })
+  }
+
+  fn first_of(&self, key: KeyT) -> GResult<KeyBuffer> {
+    self.iter()
+      .take_while(|kb| kb.key <= key)
+      .last()
+      .ok_or_else(|| Box::new(OutofCoverageError) as GenericError)
   }
 }
 

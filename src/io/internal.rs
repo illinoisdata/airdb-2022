@@ -155,24 +155,23 @@ impl IntervalCache {
     &self.buffer
   }
 
-  fn missing(&self, range: &Range) -> Option<Range> {
+  fn fill_if_missing(&mut self, es: &ExternalStorage, url: &Url, range: &Range) -> GResult<()> {
     let diff_intervals = self.intervals.get_interval_difference(self.intersect(range));
     let num_diff = diff_intervals.len();
     if num_diff > 0 {
-      Some(intervals_to_range(&(diff_intervals[0].0, diff_intervals[num_diff - 1].1)))
-    } else {
-      None
+      // smallest single missing interval (single large IO is better than parallel small IOs)
+      let range = intervals_to_range(&(diff_intervals[0].0, diff_intervals[num_diff - 1].1));
+      let offset_l = range.offset - self.cache_offset;
+      let offset_r = range.offset + range.length - self.cache_offset;
+
+      // read into the buffer interval
+      log::debug!("Cache interval missed {}, range= {:?}", url.to_string(), range);
+      es.select_adaptor(url)?.read_in_place(url, &range, &mut self.buffer[offset_l .. offset_r])?;
+
+      // update interval
+      self.intervals.insert(range_to_interval(&range));
     }
-  }
-
-  fn update(&mut self, range: &Range, bytes: &ArcBytes) {
-    // update buffer in range
-    let offset_l = range.offset - self.cache_offset;
-    let offset_r = range.offset + range.length - self.cache_offset;
-    self.buffer[offset_l .. offset_r].clone_from_slice(bytes);
-
-    // update interval
-    self.intervals.insert(range_to_interval(range));
+    Ok(())
   }
 
   fn len(&self) -> usize {
@@ -204,14 +203,7 @@ impl ExternalStorage {
   }
 
   fn fill_in_range(&self, cache_line: &mut ArcIntervalCache, url: &Url, range: &Range) -> GResult<()> {
-    let missing_range = cache_line.read().unwrap().missing(range);
-    if let Some(mut missing_range) = missing_range {
-      log::debug!("Cache interval missed {}, range= {:?}", url.to_string(), missing_range);
-      let missing_bytes = self.select_adaptor(url)?.read_range(url, &missing_range)?;
-      missing_range.length = std::cmp::min(missing_range.length, missing_bytes.len());
-      cache_line.write().unwrap().update(&missing_range, &missing_bytes);
-    }
-    Ok(())
+    cache_line.write().unwrap().fill_if_missing(self, url, range)
   }
 
   fn read_through_page(&self, url: &Url, page_idx: usize, range: &Range) -> GResult<(usize, ArcIntervalCache)> {
@@ -250,11 +242,16 @@ impl ExternalStorage {
 
 impl Adaptor for ExternalStorage {
   fn read_all(&self, url: &Url) -> GResult<ArcBytes> {
-    // TODO: cache these?
     self.select_adaptor(url)?.read_all(url)
   }
 
   fn read_range(&self, url: &Url, range: &Range) -> GResult<ArcBytes> {
+    let mut buffer = vec![0u8; range.length];
+    self.read_in_place(url, range, &mut buffer)?;
+    Ok(Arc::new(buffer))
+  }
+
+  fn read_in_place(&self, url: &Url, range: &Range, buffer: &mut [u8]) -> GResult<()> {
     // read multiple pages in parallel
     let pages = self.range_to_pages(range)
       // .into_par_iter()
@@ -262,7 +259,6 @@ impl Adaptor for ExternalStorage {
       .collect::<GResult<Vec<(usize, ArcIntervalCache)>>>()?;
 
     // concatenate page
-    let mut buf = vec![0u8; range.length];
     for (page_idx, page_cache) in pages {
       let locked_page_cache = page_cache.read().unwrap();
       let page_bytes = locked_page_cache.get_bytes();
@@ -271,9 +267,9 @@ impl Adaptor for ExternalStorage {
       let page_r = std::cmp::min(page_bytes.len(), (range.offset + range.length).saturating_sub(page_range.offset));
       let buf_l = (page_range.offset + page_l).saturating_sub(range.offset);
       let buf_r = (page_range.offset + page_r).saturating_sub(range.offset);
-      buf[buf_l..buf_r].clone_from_slice(&page_bytes[page_l..page_r])
+      buffer[buf_l..buf_r].clone_from_slice(&page_bytes[page_l..page_r])
     }
-    Ok(Arc::new(buf))
+    Ok(())
   }
 
   fn create(&self, url: &Url) -> GResult<()> {

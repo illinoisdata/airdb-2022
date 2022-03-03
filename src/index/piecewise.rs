@@ -1,6 +1,4 @@
 use serde::{Serialize, Deserialize};
-use std::error::Error;
-use std::fmt;
 use std::fmt::Debug;
 
 use crate::common::error::GResult;
@@ -25,19 +23,6 @@ use crate::store::key_position::KeyPositionRange;
 use crate::store::key_position::KeyT;
 
 
-#[derive(Debug, Clone)]
-struct OutofCoverageError;
-
-impl fmt::Display for OutofCoverageError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "submodels in the predicted range does not cover the given key")
-    }
-}
-
-impl Error for OutofCoverageError {}
-unsafe impl Send for OutofCoverageError {}
-unsafe impl Sync for OutofCoverageError {}
-
 #[derive(Debug)]
 pub struct PiecewiseIndex {
   data_store: Box<dyn DataStore>,
@@ -57,13 +42,14 @@ impl PiecewiseIndex {
   }
 
   fn select_relevant_kb(reader: Box<dyn DataStoreReader>, key: &KeyT) -> GResult<KeyBuffer> {
-    // assuming key-buffers are sorted by key
-    let last_kb = reader.iter().take_while(|kb| kb.key <= *key).last();
+    reader.first_of(*key)
+    // // assuming key-buffers are sorted by key
+    // let last_kb = reader.iter().take_while(|kb| kb.key <= *key).last();
 
-    // // not assuming ordered by key, but more deserialization
-    // let last_kb = reader.iter().filter(|kb| kb.key <= *key).max_by_key(|kb| kb.key);
+    // // // not assuming ordered by key, but more deserialization
+    // // let last_kb = reader.iter().filter(|kb| kb.key <= *key).max_by_key(|kb| kb.key);
 
-    last_kb.ok_or_else(|| Box::new(OutofCoverageError) as Box<dyn Error + Send + Sync>)
+    // last_kb.ok_or_else(|| Box::new(OutofCoverageError) as Box<dyn Error + Send + Sync>)
   }
 }
 

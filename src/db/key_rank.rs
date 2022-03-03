@@ -57,6 +57,7 @@ impl SOSDRankDB {
       .predict(&key)?;
     let reader = self.array_store.read_array_within(kpr.offset, kpr.length)?;
     log::trace!("received rank buffer from {:?}", kpr);
+    // TODO binary search this part
     for (idx, (dbuffer, rank)) in reader.iter_with_rank().enumerate() {
       let current_key = self.deserialize_key(dbuffer);
       if current_key == key {
