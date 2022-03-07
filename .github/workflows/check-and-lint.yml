@@ -12,3 +12,15 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           args: --all-features
+  airkv_clippy_check:
+    runs-on: ubuntu-latest
+    env:
+       working-directory: ./airkv
+    steps:
+      - uses: actions/checkout@v1
+      - run: rustup component add clippy
+        working-directory: ${{env.working-directory}}
+      - uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features

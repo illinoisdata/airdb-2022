@@ -177,3 +177,5 @@ notebooks
 
 # temporary directories
 tmp
+
+.vscode/
