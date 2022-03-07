@@ -17,19 +17,16 @@ impl Message {
     }
 }
 
-#[derive(Default)]
 pub struct FakeAppendStore {
-    sender: Option<Sender<Message>>,
+    sender: Sender<Message>,
 }
 
-impl FakeAppendStore {
-    /*
-     In multi thread context, init method is expected to be executed only once globally
-    */
-    pub fn init(&mut self) {
+impl Default for FakeAppendStore {
+    fn default() -> Self {
         // create message channel
-        let (tx, rx) = mpsc::channel();
-        self.sender = Some(tx);
+        let (tx, rx): (Sender<Message>, mpsc::Receiver<Message>) = mpsc::channel();
+
+        // create consumer thread to flush appending data
         thread::spawn(move || {
             for msg in rx {
                 let mut f = OpenOptions::new()
@@ -47,9 +44,12 @@ impl FakeAppendStore {
                 });
             }
         });
+        Self { sender: tx }
     }
+}
 
-    pub fn get_sender(&self) -> Option<Sender<Message>> {
-        self.sender.as_ref().cloned()
+impl FakeAppendStore {
+    pub fn get_sender(&self) -> Sender<Message> {
+        self.sender.clone()
     }
 }

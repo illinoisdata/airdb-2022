@@ -4,24 +4,25 @@ use super::storage_connector::StorageConnector;
 use crate::common::error::GResult;
 use crate::io::fake_append_store::FakeAppendStore;
 use crate::io::file_utils::FileUtil;
-use lazy_static::lazy_static;
+
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::mpsc::Sender;
-use std::sync::{Mutex, Once};
+use std::sync::Mutex;
 use url::Url;
 
-static START: Once = Once::new();
 
 /*
  FAKE_STORE is the unique instance of FakeAppendStore and may be shared by multiple clients in mock tests.
 
- FakeAppendStore is a singleton shared by multiple clients. It controls the consumer thread to keep flushing the append data from the message-passing channel receiver side. FakeAppendStore.init() triggers the consumer thread and should be called only once globally, which is managed by LocalStorageConnector.open().
+ FakeAppendStore is a singleton shared by multiple clients. It controls the consumer thread to keep flushing the append data from the message-passing channel receiver side. The constructor of FakeAppendStore triggers the consumer thread.
 */
+
 lazy_static! {
     static ref FAKE_STORE: Mutex<FakeAppendStore> = Mutex::new(FakeAppendStore::default());
-}
+}   
+
 
 /*
   Design:
@@ -33,12 +34,8 @@ lazy_static! {
 
     Usage Example(for each client):
 
-    // create its own instance of LocalStorageConnector
+    // the client creates its own instance of LocalStorageConnector
     let local_connector = LocalStorageConnector::default();
-    // call LocalStorageConnector.open() to trigger the backend consumer thread and get the sender side for message-passing
-    // channel between the clients and the consumer thread(receiver)
-    // if multiple clients exist and call LocalStorageConnector.open(), only the first client who calls the open() method can
-    // trigger the consumer thread(which is guarenteed by open() internals)
     local_connector.open(props_hashmap);
     // do regular access operations
     local_connector.append(path_to_append, data_to_append);
@@ -55,10 +52,7 @@ impl StorageConnector for LocalStorageConnector {
     // open connection
     fn open(&mut self, _props: &HashMap<String, String>) -> GResult<()> {
         // only the first thread which calls this method can init the FakeAppendStore and therefore create the backend consumer thread. This mechanism of being called once globally is ensured by START.call_once().
-        START.call_once(move || {
-            FAKE_STORE.lock().unwrap().init();
-        });
-        self.writer = FAKE_STORE.lock().unwrap().get_sender();
+        self.writer = Some(FAKE_STORE.lock().unwrap().get_sender());
         Ok(())
     }
 

@@ -1,3 +1,4 @@
+extern crate lazy_static;
 pub mod storage_connector;
 pub mod local_storage_conn;
 pub mod fake_append_store;
