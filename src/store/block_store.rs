@@ -4,10 +4,12 @@ use std::fmt;
 use std::rc::Rc;
 use url::Url;
 
+use crate::common::error::GenericError;
 use crate::common::error::GResult;
 use crate::common::error::IncompleteDataStoreFromMeta;
+use crate::common::error::OutofCoverageError;
+use crate::io::internal::ExternalStorage;
 use crate::io::storage::Adaptor;
-use crate::io::storage::ExternalStorage;
 use crate::io::storage::Range;
 use crate::io::storage::ReadRequest;
 use crate::meta::Context;
@@ -17,6 +19,7 @@ use crate::store::DataStoreMetaserde;
 use crate::store::DataStoreReader;
 use crate::store::DataStoreReaderIter;
 use crate::store::DataStoreWriter;
+use crate::store::KeyT;
 use crate::store::key_buffer::KeyBuffer;
 use crate::store::key_position::KeyPositionCollection;
 use crate::store::key_position::PositionT;
@@ -127,14 +130,17 @@ impl BlockStore {
     self.state.cfg.block_size / self.state.cfg.page_size
   }
 
+  fn block_path(&self, block_idx: usize) -> String {
+    format!("{}_block_{}", self.state.cfg.block_name, block_idx)
+  }
+
   fn block_url(&self, block_idx: usize) -> GResult<Url> {
-    let block_fullname = format!("{}_block_{}", self.state.cfg.block_name, block_idx);
-    Ok(self.prefix_url.join(&block_fullname)?)
+    Ok(self.prefix_url.join(&self.block_path(block_idx))?)
   }
 
   fn write_block(&self, block_idx: usize, block_buffer: &[u8]) -> GResult<()> {
       let block_url = self.block_url(block_idx)?;
-      self.storage.borrow_mut().write_all(&block_url, block_buffer)
+      self.storage.borrow().write_all(&block_url, block_buffer)
   }
 
   fn read_page_range(&self, offset: PositionT, length: PositionT) -> GResult<(Vec<FlagT>, Vec<u8>)> {
@@ -145,7 +151,7 @@ impl BlockStore {
 
     // make read requests
     let requests = self.read_page_range_requests(start_page_idx, end_page_idx)?;
-    let section_buffers = self.storage.borrow_mut().read_batch_sequential(&requests)?;
+    let section_buffers = self.storage.borrow().read_batch_sequential(&requests)?;
     let mut flags = Vec::new();
     let mut chunks_buffer = Vec::new();
     for section_buffer in section_buffers {
@@ -206,6 +212,12 @@ impl DataStore for BlockStore {
     let (chunk_flags, chunks_buffer) = self.read_page_range(offset, length)?;
     let chunk_size = self.chunk_size();
     Ok(Box::new(BlockStoreReader::new(chunk_flags, chunks_buffer, chunk_size)))
+  }
+
+  fn relevant_paths(&self) -> GResult<Vec<String>> {
+    let total_size = self.state.total_pages * self.state.cfg.page_size;
+    let num_blocks = total_size / self.state.cfg.block_size + (total_size % self.state.cfg.block_size != 0) as usize;
+    Ok((0..num_blocks).map(|block_idx| self.block_path(block_idx)).collect())
   }
 }
 
@@ -366,6 +378,13 @@ impl BlockStoreReader {
 impl DataStoreReader for BlockStoreReader {
   fn iter(&self) -> Box<dyn DataStoreReaderIter + '_> {
     Box::new(BlockStoreReaderIter{ r: self, chunk_idx: self.chunk_idx_first })
+  }
+
+  fn first_of(&self, key: KeyT) -> GResult<KeyBuffer> {
+    self.iter()
+      .take_while(|kb| kb.key <= key)
+      .last()
+      .ok_or_else(|| Box::new(OutofCoverageError) as GenericError)
   }
 }
 

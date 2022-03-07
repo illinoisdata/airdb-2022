@@ -4,6 +4,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
 use std::time::Instant;
 use structopt::StructOpt;
 use url::Url;
@@ -15,15 +16,14 @@ use airindex::index::hierarchical::BalanceStackIndexBuilder;
 use airindex::index::hierarchical::BoundedTopStackIndexBuilder;
 use airindex::index::Index;
 use airindex::index::IndexBuilder;
+use airindex::io::internal::ExternalStorage;
 use airindex::io::profile::AffineStorageProfile;
 use airindex::io::profile::Bandwidth;
 use airindex::io::profile::Latency;
 use airindex::io::profile::StorageProfile;
 use airindex::io::storage::Adaptor;
 use airindex::io::storage::AzureStorageAdaptor;
-use airindex::io::storage::ExternalStorage;
 use airindex::io::storage::FileSystemAdaptor;
-use airindex::io::storage::MmapAdaptor;
 use airindex::meta::Context;
 use airindex::meta;
 use airindex::model::ModelDrafter;
@@ -88,9 +88,9 @@ pub struct Cli {
 
   /* For testing/debugging */
 
-  /// disable cache to storage IO interface
-  #[structopt(long)]
-  no_cache: bool,
+  // /// disable cache to storage IO interface
+  // #[structopt(long)]
+  // no_cache: bool,
   /// disable parallel index building
   #[structopt(long)]
   no_parallel: bool,
@@ -112,13 +112,24 @@ pub struct BenchmarkResult<'a> {
 
 /* Experiment scope */
 
-#[derive(Debug)]
 struct Experiment {
   storage: Rc<RefCell<ExternalStorage>>,
   sosd_context: Context,
   db_context: Context,
   sosd_blob_name: String,
   keyset_url: Url,
+}
+
+impl std::fmt::Debug for Experiment {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("Context")
+      .field("storage", &self.storage)
+      .field("sosd_context", &self.sosd_context)
+      .field("db_context", &self.db_context)
+      .field("sosd_blob_name", &self.sosd_blob_name)
+      .field("keyset_url", &self.keyset_url.to_string())
+      .finish()
+  }
 }
 
 impl Experiment {
@@ -148,24 +159,26 @@ impl Experiment {
     })
   }
 
-  fn load_io(args: &Cli) -> GResult<ExternalStorage> {
+  fn load_io(_args: &Cli) -> GResult<ExternalStorage> {
     let mut es = ExternalStorage::new();
 
     // file system
-    let fsa = if args.no_cache {
-      Box::new(FileSystemAdaptor::new()) as Box<dyn Adaptor>
-    } else {
-      Box::new(MmapAdaptor::new()) as Box<dyn Adaptor>
-    };
+    // let fsa = if args.no_cache {
+    //   Box::new(FileSystemAdaptor::new()) as Box<dyn Adaptor>
+    // } else {
+    //   Box::new(MmapAdaptor::new()) as Box<dyn Adaptor>
+    // };
+    let fsa = Box::new(FileSystemAdaptor::new()) as Box<dyn Adaptor>;
     es = es.with("file".to_string(), fsa)?;
 
     // azure storage
-    let aza = if args.no_cache {
-      AzureStorageAdaptor::new_block()
-    } else {
-      log::warn!("Cache not implemented for Azure IO");
-      AzureStorageAdaptor::new_block()
-    };
+    // let aza = if args.no_cache {
+    //   AzureStorageAdaptor::new_block()
+    // } else {
+    //   log::warn!("Cache not implemented for Azure IO");
+    //   AzureStorageAdaptor::new_block()
+    // };
+    let aza = AzureStorageAdaptor::new_block();
     match aza {
       Ok(aza) => es = es.with("az".to_string(), Box::new(aza))?,
       Err(e) => log::error!("Failed to initialize azure storage, {:?}", e),
@@ -198,7 +211,7 @@ impl Experiment {
 
     // write metadata
     self.db_context.storage.as_ref().unwrap()
-      .borrow_mut()
+      .borrow()
       .write_all(&self.db_meta()?, &meta_bytes)?;
 
     Ok(())
@@ -321,7 +334,7 @@ impl Experiment {
 
   pub fn benchmark(&self, args: &Cli) -> GResult<(Vec<u128>, Vec<usize>)> {
     // read keyset
-    let keyset_bytes = self.storage.borrow_mut().read_all(&self.keyset_url)?;
+    let keyset_bytes = self.storage.borrow().read_all(&self.keyset_url)?;
     let test_keyset = read_keyset(&keyset_bytes)?;
     let num_samples = match args.num_samples {
       Some(num_samples) => num_samples,
@@ -329,28 +342,34 @@ impl Experiment {
     };
 
     // start the clock and begin db/index reconstruction
-    log::debug!("starting the benchmark");
+    log::debug!("Starting the benchmark");
     let mut time_measures = Vec::new();
     let mut query_counts = Vec::new();
+    let mut last_count_milestone = 0;
     let mut count_milestone = 1;
+    let mut last_elasped = Duration::ZERO;
     let freq_mul: f64 = 1.1;
     let start_time = Instant::now();
     let sosd_db = self.reload()?;
-    log::debug!("reloaded rank db");
+    log::debug!("Reloaded rank db");
     for (idx, test_kr) in test_keyset.iter().enumerate().take(num_samples) {
       let rcv_kr = sosd_db.rank_of(test_kr.key)?
         .unwrap_or_else(|| panic!("Existing key {} not found", test_kr.key));
       assert_eq!(rcv_kr, *test_kr, "Mismatch rank rcv: {:?}, actual: {:?}", rcv_kr, test_kr);
       if idx + 1 == count_milestone || idx + 1 == num_samples {
+        let count_processed = idx + 1;
         let time_elapsed = start_time.elapsed();
         time_measures.push(time_elapsed.as_nanos());
-        query_counts.push(idx + 1);
+        query_counts.push(count_processed);
         log::info!(
-            "t= {:?}: {} counts, {:?}/op",
+            "t= {:>9.2?}: {:7} counts, tot {:>9.2?}/op, seg {:>9.2?}/op",
             time_elapsed,
-            idx + 1,
-            time_elapsed / (idx + 1).try_into().unwrap()
+            count_processed,
+            time_elapsed / count_processed.try_into().unwrap(),
+            (time_elapsed - last_elasped) / (count_processed - last_count_milestone).try_into().unwrap() 
         );
+        last_elasped = time_elapsed;
+        last_count_milestone = count_processed;
         count_milestone = (count_milestone as f64 * freq_mul).ceil() as usize;
       }
     }
@@ -359,9 +378,11 @@ impl Experiment {
 
   fn reload(&self) -> GResult<SOSDRankDB> {
     let meta_bytes = self.db_context.storage.as_ref().unwrap()
-      .borrow_mut()
+      .borrow()
       .read_all(&self.db_meta()?)?;
+    log::trace!("Loaded metadata of {} bytes", meta_bytes.len());
     let meta = meta::deserialize(&meta_bytes)?;
+    log::trace!("Deserialized metadata");
     SOSDRankDB::from_meta(meta, &self.sosd_context, &self.db_context)
   }
 

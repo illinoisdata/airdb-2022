@@ -42,6 +42,8 @@ unsafe impl Send for InvalidAzureStorageUrl {}
 unsafe impl Sync for InvalidAzureStorageUrl {}
 
 
+/* External Store */
+
 #[derive(Display, Debug, Clone)]
 pub struct ConflictingStorageScheme {
   scheme: String,
@@ -57,14 +59,14 @@ unsafe impl Sync for ConflictingStorageScheme {}
 
 
 #[derive(Display, Debug, Clone)]
-#[display(fmt = "requested {}, only {:?} supported", scheme, supported)]
+#[display(fmt = "Requested {}, only {:?} supported", scheme, supported)]
 pub struct UnavailableStorageScheme {
   scheme: String,
   supported: Vec<String>,
 }
 impl UnavailableStorageScheme {
-  pub fn new(scheme: String, supported: Vec<String>) -> UnavailableStorageScheme {
-    UnavailableStorageScheme { scheme, supported: supported.to_vec() }
+  pub fn boxed(scheme: String, supported: Vec<String>) -> GenericError {
+    Box::new(UnavailableStorageScheme { scheme, supported: supported.to_vec() })
   }
 }
 impl Error for UnavailableStorageScheme {}
@@ -86,3 +88,19 @@ impl IncompleteDataStoreFromMeta {
 impl Error for IncompleteDataStoreFromMeta {}
 unsafe impl Send for IncompleteDataStoreFromMeta {}
 unsafe impl Sync for IncompleteDataStoreFromMeta {}
+
+
+/* Index */
+
+#[derive(Debug, Clone)]
+pub struct OutofCoverageError;
+
+impl std::fmt::Display for OutofCoverageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "submodels in the predicted range does not cover the given key")
+    }
+}
+
+impl Error for OutofCoverageError {}
+unsafe impl Send for OutofCoverageError {}
+unsafe impl Sync for OutofCoverageError {}

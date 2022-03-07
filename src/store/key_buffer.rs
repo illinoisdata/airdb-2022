@@ -31,12 +31,14 @@ impl KeyBuffer {  // maybe implement in Serializer, Deserializer instead?
   }
 
   pub fn deserialize(serialized_buffer: &[u8]) -> KeyBuffer {
-    let mut key_bytes = [0u8; KEY_LENGTH];
-    key_bytes[..KEY_LENGTH].clone_from_slice(&serialized_buffer[..KEY_LENGTH]);
     KeyBuffer {
-      key: KeyT::from_be_bytes(key_bytes),
+      key: KeyT::from_be_bytes(serialized_buffer[..KEY_LENGTH].try_into().unwrap()),
       buffer: serialized_buffer[KEY_LENGTH..].to_vec(),
     }
+  }
+
+  pub fn deserialize_key(serialized_buffer: &[u8]) -> KeyT {
+    KeyT::from_be_bytes(serialized_buffer[..KEY_LENGTH].try_into().unwrap())
   }
 
   pub fn serialized_size(&self) -> usize {

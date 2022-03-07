@@ -5,12 +5,14 @@ use crate::common::error::GResult;
 use crate::meta::Context;
 use crate::store::key_buffer::KeyBuffer;
 use crate::store::key_position::KeyPositionCollection;
+use crate::store::key_position::KeyT;
 use crate::store::key_position::PositionT;
 
 pub trait DataStore: DataStoreMetaserde + Debug {
   fn begin_write(&mut self) -> GResult<Box<dyn DataStoreWriter + '_>>;
   fn read_all(&self) -> GResult<Box<dyn DataStoreReader>>;
   fn read_within(&self, offset: PositionT, length: PositionT) -> GResult<Box<dyn DataStoreReader>>;
+  fn relevant_paths(&self) -> GResult<Vec<String>>;
 }
 
 pub trait DataStoreWriter {
@@ -20,6 +22,7 @@ pub trait DataStoreWriter {
 
 pub trait DataStoreReader {
   fn iter(&self) -> Box<dyn DataStoreReaderIter + '_>;
+  fn first_of(&self, key: KeyT) -> GResult<KeyBuffer>;
 }
 
 pub trait DataStoreReaderIter: Iterator<Item = KeyBuffer> {}

@@ -22,9 +22,10 @@ pub trait IndexBuilder {
   fn build_index(&self, kps: &KeyPositionCollection) -> GResult<Box<dyn Index>>;
 }
 
-pub mod naive;
 pub mod piecewise;
 pub mod hierarchical;
+pub mod naive;
+pub mod stash;
 
 
 // FUTURE: extensible metaserde?
@@ -33,6 +34,7 @@ pub enum IndexMeta {
   Piecewise { meta: piecewise::PiecewiseIndexMeta },
   Stack { meta: Box<hierarchical::StackIndexMeta> },
   Naive { meta: naive::NaiveIndex },
+  Stash { meta: stash::StashIndex },
 }
 
 pub trait IndexMetaserde {
@@ -45,6 +47,7 @@ impl IndexMeta {
       IndexMeta::Piecewise { meta } => Box::new(piecewise::PiecewiseIndex::from_meta(meta, ctx)?) as Box<dyn Index>,
       IndexMeta::Stack { meta } => Box::new(hierarchical::StackIndex::from_meta(*meta, ctx)?) as Box<dyn Index>,
       IndexMeta::Naive { meta } => Box::new(naive::NaiveIndex::from_meta(meta, ctx)?) as Box<dyn Index>,
+      IndexMeta::Stash { meta } => Box::new(stash::StashIndex::from_meta(meta, ctx)?) as Box<dyn Index>,
     };
     Ok(store)
   }
