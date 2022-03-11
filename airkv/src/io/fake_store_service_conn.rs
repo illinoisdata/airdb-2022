@@ -18,12 +18,6 @@ pub mod fakestore_service_connector {
 
 type ClientType = FakeStoreServiceClient<Channel>;
 
-// lazy_static! {
-//     pub static ref RUN_TIME:RefCell<Runtime> = {
-//         RefCell::new(Runtime::new().expect("Failed to initialize tokio runtime"));
-//     };
-// }   
-
 ///
 /// FakeStoreServiceConnector provides API for clients to connect with the remote fake store service.
 /// It is an alternative implementation for LocalStorageConnector.
