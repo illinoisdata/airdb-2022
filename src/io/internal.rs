@@ -1,18 +1,16 @@
 use moka::sync::Cache;
 // use rayon::prelude::*;
 use std::collections::HashMap;
-use std::ops::Bound;
-use std::ops::Bound::Excluded;
-use std::ops::Bound::Included;
 use std::sync::Arc;
 use std::sync::RwLock;
-use unbounded_interval_tree::IntervalTree;
 use url::Url;
 
 use crate::common::ArcBytes;
 use crate::common::error::ConflictingStorageScheme;
 use crate::common::error::GResult;
 use crate::common::error::UnavailableStorageScheme;
+use crate::io::intervals::Interval;
+use crate::io::intervals::Intervals;
 use crate::io::storage::Adaptor;
 use crate::io::storage::Range;
 use crate::io::storage::ReadRequest;
@@ -25,6 +23,7 @@ pub struct ExternalStorage {
   schemes: Vec<String>,  // HACK: for error reporting
   page_cache: Cache<Url, ArcIntervalCache>,
   page_size: usize,
+  read_unit_size: usize,
 }
 
 impl std::fmt::Debug for ExternalStorage {
@@ -34,6 +33,7 @@ impl std::fmt::Debug for ExternalStorage {
       .field("schemes", &self.schemes)
       .field("page_cache_capacity", &self.page_cache.max_capacity())
       .field("page_size", &self.page_size)
+      .field("read_unit_size", &self.read_unit_size)
       .finish()
   }
 }
@@ -47,10 +47,10 @@ impl Default for ExternalStorage {
 impl ExternalStorage {
   pub fn new() -> ExternalStorage {
     // ExternalStorage::new_with_cache(1 << 33 /* 8 GB */, 1 << 12 /* 4096 */)
-    ExternalStorage::new_with_cache(1 << 33 /* 8 GB */, 1 << 27 /* 128 MB */)
+    ExternalStorage::new_with_cache(1 << 33 /* 8 GB */, 1 << 27 /* 128 MB */, 1 << 10 /* 1024 */)
   }
 
-  pub fn new_with_cache(cache_size: u64, page_size: usize) -> ExternalStorage {
+  pub fn new_with_cache(cache_size: u64, page_size: usize, read_unit_size: usize) -> ExternalStorage {
     ExternalStorage{
       adaptors: HashMap::new(),
       schemes: Vec::new(),
@@ -60,7 +60,8 @@ impl ExternalStorage {
         })
         .max_capacity(cache_size)
         .build(),
-      page_size
+      page_size,
+      read_unit_size,
     }
   }
 
@@ -101,25 +102,13 @@ impl ExternalStorage {
 
 // cache-related logics
 
-type Interval = (Bound<usize>, Bound<usize>);
-
-fn range_to_interval(range: &Range) -> Interval {
-  (Included(range.offset), Excluded(range.offset + range.length))
-}
-
-fn intervals_to_range(interval: &Interval) -> Range {
-  if let (Included(offset_l), Excluded(offset_r)) = interval {
-    return Range { offset: *offset_l, length: offset_r - offset_l }
-  }
-  panic!("Should only contain include-exclude ranges")
-}
-
 type ArcIntervalCache = Arc<RwLock<IntervalCache>>;
 
 struct IntervalCache {
   cache_offset: usize,
   buffer: Vec<u8>,
-  intervals: IntervalTree<usize>,
+  read_unit: usize,
+  intervals: Intervals,
 }
 
 impl std::fmt::Debug for IntervalCache {
@@ -127,26 +116,30 @@ impl std::fmt::Debug for IntervalCache {
     f.debug_struct("IntervalCache")
       .field("offset", &self.cache_offset)
       .field("length", &self.buffer.len())
-      .field("num_intervals", &self.intervals.len())
+      .field("read_unit", &self.read_unit)
       .finish()
   }
 }
 
 impl IntervalCache {
-  fn new(cache_offset: usize, length: usize) -> ArcIntervalCache {
+  fn new(cache_offset: usize, length: usize, read_unit: usize) -> ArcIntervalCache {
+    assert!(length % read_unit == 0);
     Arc::new(RwLock::new(IntervalCache {
       cache_offset,
       buffer: vec![0u8; length],
-      intervals: IntervalTree::default(),
+      read_unit,
+      intervals: Intervals::empty(length / read_unit),
     }))
   }
 
-  fn from_filled(cache_offset: usize, buffer: Vec<u8>) -> ArcIntervalCache {
-    let mut intervals = IntervalTree::default();
-    intervals.insert((Included(cache_offset), Excluded(cache_offset + buffer.len())));
+  fn from_filled(cache_offset: usize, buffer: Vec<u8>, read_unit: usize) -> ArcIntervalCache {
+    let intervals = Intervals::full(
+      buffer.len() / read_unit + (buffer.len() % read_unit != 0) as usize
+    );
     Arc::new(RwLock::new(IntervalCache {
       cache_offset,
       buffer,
+      read_unit,
       intervals,
     }))
   }
@@ -156,20 +149,17 @@ impl IntervalCache {
   }
 
   fn fill_if_missing(&mut self, es: &ExternalStorage, url: &Url, range: &Range) -> GResult<()> {
-    let diff_intervals = self.intervals.get_interval_difference(self.intersect(range));
-    let num_diff = diff_intervals.len();
-    if num_diff > 0 {
-      // smallest single missing interval (single large IO is better than parallel small IOs)
-      let range = intervals_to_range(&(diff_intervals[0].0, diff_intervals[num_diff - 1].1));
-      let offset_l = range.offset - self.cache_offset;
-      let offset_r = range.offset + range.length - self.cache_offset;
+    if let Some(missing_range) = self.missing_range(range) {
+      // adjust missing offsets
+      let offset_l = missing_range.offset - self.cache_offset;
+      let offset_r = missing_range.offset + missing_range.length - self.cache_offset;
 
       // read into the buffer interval
-      log::debug!("Cache interval missed {}, range= {:?}", url.to_string(), range);
-      es.select_adaptor(url)?.read_in_place(url, &range, &mut self.buffer[offset_l .. offset_r])?;
+      log::debug!("Cache interval missed {}, missing_range= {:?}", url.to_string(), missing_range);
+      es.select_adaptor(url)?.read_in_place(url, &missing_range, &mut self.buffer[offset_l .. offset_r])?;
 
       // update interval
-      self.intervals.insert(range_to_interval(&range));
+      self.intervals.fill(&self.range_to_interval(&missing_range));
     }
     Ok(())
   }
@@ -178,10 +168,37 @@ impl IntervalCache {
     self.buffer.len()
   }
 
-  fn intersect(&self, range: &Range) -> Interval {
-    let offset = std::cmp::max(range.offset, self.cache_offset);
-    let offset_r = std::cmp::min(range.offset + range.length, self.cache_offset + self.buffer.len());
-    range_to_interval(&Range { offset, length: offset_r - offset })
+  fn missing_range(&self, range: &Range) -> Option<Range> {
+    self.intervals
+      .missing(&self.range_to_interval(&self.intersect(range)))
+      .map(|missing_interval| self.interval_to_range(&missing_interval))
+  }
+
+  fn intersect(&self, range: &Range) -> Range {
+    let offset_l = std::cmp::max(self.round_down(range.offset), self.cache_offset);
+    let offset_r = std::cmp::min(self.round_up(range.offset + range.length), self.cache_offset + self.buffer.len());
+    Range { offset: offset_l, length: offset_r - offset_l }
+  }
+
+  fn round_down(&self, offset: usize) -> usize {
+    (offset / self.read_unit) * self.read_unit
+  }
+
+  fn round_up(&self, offset: usize) -> usize {
+    (offset / self.read_unit + (offset % self.read_unit != 0) as usize) * self.read_unit 
+  }
+
+  fn range_to_interval(&self, range: &Range) -> Interval {
+    let offset_l = self.round_down(range.offset - self.cache_offset);
+    let offset_r = self.round_up(range.offset + range.length - self.cache_offset);
+    (offset_l / self.read_unit, offset_r / self.read_unit)
+  }
+
+  fn interval_to_range(&self, interval: &Interval) -> Range {
+    let (left, right) = interval;
+    let offset_l = left * self.read_unit + self.cache_offset;
+    let offset_r = right * self.read_unit + self.cache_offset;
+    Range { offset: offset_l, length: offset_r - offset_l }
   }
 }
 
@@ -197,7 +214,10 @@ impl ExternalStorage {
         let page_range = self.page_to_range(page_idx);
         let page_offset_r = std::cmp::min(buffer_range.length, page_range.offset + page_range.length);
         let page_bytes = url_buffer[page_range.offset .. page_offset_r].to_vec();
-        self.page_cache.insert(paged_url, IntervalCache::from_filled(page_range.offset, page_bytes))
+        self.page_cache.insert(
+          paged_url,
+          IntervalCache::from_filled(page_range.offset, page_bytes, self.read_unit_size)
+        )
       });
     log::debug!("Warmed up cache for {:?}", url.to_string());
   }
@@ -218,7 +238,7 @@ impl ExternalStorage {
     } else {
       // cache miss... fetch from adaptor
       log::debug!("Cache line missing {:?}", paged_url.to_string());
-      let mut cache_line = IntervalCache::new(page_idx * self.page_size, self.page_size);
+      let mut cache_line = IntervalCache::new(page_idx * self.page_size, self.page_size, self.read_unit_size);
       self.page_cache.insert(paged_url, cache_line.clone());  // cheap clone of Arc
       self.fill_in_range(&mut cache_line, url, range)?;  // data
       Ok((page_idx, cache_line))
@@ -314,49 +334,49 @@ mod tests {
   #[test]
   fn es_write_all_zero_ok() -> GResult<()> {
     let (temp_dir, fsa) = fsa_tempdir_setup()?;
-    let es = ExternalStorage::new_with_cache(65536, 100).with("file".to_string(), Box::new(fsa))?;
+    let es = ExternalStorage::new_with_cache(65536, 100, 10).with("file".to_string(), Box::new(fsa))?;
     write_all_zero_ok(es, &url_from_dir_path(temp_dir.path())?)
   }
 
   #[test]
   fn es_write_read_all_zero_ok() -> GResult<()> {
     let (temp_dir, fsa) = fsa_tempdir_setup()?;
-    let es = ExternalStorage::new_with_cache(65536, 100).with("file".to_string(), Box::new(fsa))?;
+    let es = ExternalStorage::new_with_cache(65536, 100, 10).with("file".to_string(), Box::new(fsa))?;
     write_read_all_zero_ok(es, &url_from_dir_path(temp_dir.path())?)
   }
 
   #[test]
   fn es_write_read_all_random_ok() -> GResult<()> {
     let (temp_dir, fsa) = fsa_tempdir_setup()?;
-    let es = ExternalStorage::new_with_cache(65536, 100).with("file".to_string(), Box::new(fsa))?;
+    let es = ExternalStorage::new_with_cache(65536, 100, 10).with("file".to_string(), Box::new(fsa))?;
     write_read_all_random_ok(es, &url_from_dir_path(temp_dir.path())?)
   }
 
   #[test]
   fn es_write_twice_read_all_random_ok() -> GResult<()> {
     let (temp_dir, fsa) = fsa_tempdir_setup()?;
-    let es = ExternalStorage::new_with_cache(65536, 100).with("file".to_string(), Box::new(fsa))?;
+    let es = ExternalStorage::new_with_cache(65536, 100, 10).with("file".to_string(), Box::new(fsa))?;
     write_twice_read_all_random_ok(es, &url_from_dir_path(temp_dir.path())?)
   }
 
   #[test]
   fn es_write_read_range_random_ok() -> GResult<()> {
     let (temp_dir, fsa) = fsa_tempdir_setup()?;
-    let es = ExternalStorage::new_with_cache(65536, 100).with("file".to_string(), Box::new(fsa))?;
+    let es = ExternalStorage::new_with_cache(65536, 100, 10).with("file".to_string(), Box::new(fsa))?;
     write_read_range_random_ok(es, &url_from_dir_path(temp_dir.path())?)
   }
 
   #[test]
   fn es_write_read_generic_random_ok() -> GResult<()> {
     let (temp_dir, fsa) = fsa_tempdir_setup()?;
-    let es = ExternalStorage::new_with_cache(65536, 100).with("file".to_string(), Box::new(fsa))?;
+    let es = ExternalStorage::new_with_cache(65536, 100, 10).with("file".to_string(), Box::new(fsa))?;
     write_read_generic_random_ok(es, &url_from_dir_path(temp_dir.path())?)
   }
 
   #[test]
   fn es_read_all_ok() -> GResult<()> {
     let (resource_dir, fsa) = fsa_resources_setup()?;
-    let es = ExternalStorage::new_with_cache(65536, 100).with("file".to_string(), Box::new(fsa))?;
+    let es = ExternalStorage::new_with_cache(65536, 100, 10).with("file".to_string(), Box::new(fsa))?;
     let buf = es.read_all(&resource_dir.join("small.txt")?)?;
     let read_string = match std::str::from_utf8(&buf) {
       Ok(v) => v,
@@ -370,7 +390,7 @@ mod tests {
   fn es_read_batch_sequential() -> GResult<()> {
     let (temp_dir, fsa) = fsa_tempdir_setup()?;
     let temp_dir_url = &url_from_dir_path(temp_dir.path())?;
-    let es = ExternalStorage::new_with_cache(65536, 100).with("file".to_string(), Box::new(fsa))?;
+    let es = ExternalStorage::new_with_cache(65536, 100, 10).with("file".to_string(), Box::new(fsa))?;
 
     // write some data
     let test_path = temp_dir_url.join("test.bin")?;
