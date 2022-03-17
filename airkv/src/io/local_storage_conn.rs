@@ -6,12 +6,9 @@ use crate::io::fake_append_store::FakeAppendStore;
 use crate::io::file_utils::FileUtil;
 
 use std::collections::HashMap;
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
 use url::Url;
-
 
 /*
  FAKE_STORE is the unique instance of FakeAppendStore and may be shared by multiple clients in mock tests.
@@ -20,9 +17,8 @@ use url::Url;
 */
 
 lazy_static! {
-    static ref FAKE_STORE: Mutex<FakeAppendStore> = Mutex::new(FakeAppendStore::default());
-}   
-
+    pub static ref FAKE_STORE: Mutex<FakeAppendStore> = Mutex::new(FakeAppendStore::default());
+}
 
 /*
   Design:
@@ -63,30 +59,27 @@ impl StorageConnector for LocalStorageConnector {
     }
 
     // create empty segment at a target path
-    fn create(&self, path: &Url) -> GResult<()> {
+    fn create(&mut self, path: &Url) -> GResult<()> {
         FileUtil::create_file(path)
     }
 
     // read whole segment specified in path
-    fn read_all(&self, path: &Url) -> GResult<Vec<u8>> {
-        let f = OpenOptions::new().read(true).open(path.path())?;
-        let file_length = f.metadata()?.len();
-        FileUtil::read_range_from_file(f, &Range::new(0, file_length as usize))
+    fn read_all(&mut self, path: &Url) -> GResult<Vec<u8>> {
+        FileUtil::read_all_from_path(path)
     }
 
     // read range starting at offset for length bytes
     fn read_range(&mut self, path: &Url, range: &Range) -> GResult<Vec<u8>> {
-        let f = OpenOptions::new().read(true).open(path.path()).unwrap();
-        FileUtil::read_range_from_file(f, range)
+        FileUtil::read_range_from_path(path, range)
     }
 
     // get the current length of the target segment
-    fn get_size(&self, path: &Url) -> GResult<u64> {
+    fn get_size(&mut self, path: &Url) -> GResult<u64> {
         FileUtil::file_size(path)
     }
 
     // append the byte array to the end of a target segment
-    fn append(&self, path: &Url, buf: &[u8]) -> GResult<()> {
+    fn append(&mut self, path: &Url, buf: &[u8]) -> GResult<()> {
         self.writer
             .as_ref()
             .unwrap()
@@ -95,17 +88,12 @@ impl StorageConnector for LocalStorageConnector {
     }
 
     // write whole byte array to a segment
-    fn write_all(&self, path: &Url, buf: &[u8]) -> GResult<()> {
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path.path())?;
-        Ok(f.write_all(buf)?)
+    fn write_all(&mut self, path: &Url, buf: &[u8]) -> GResult<()> {
+        FileUtil::write_all_to_path(path, buf)
     }
 
     // remove the whole segment
-    fn remove(&self, path: &Url) -> GResult<()> {
+    fn remove(&mut self, path: &Url) -> GResult<()> {
         FileUtil::delete_file(path)
     }
 }
@@ -233,7 +221,7 @@ mod tests {
         for _ in 0..100 {
             let offset = rng.gen_range(0..test_data.len() - 1);
             let length = rng.gen_range(0..test_data.len() - offset);
-            let test_data_range = first_conn.read_range(test_url, &Range { offset, length })?;
+            let test_data_range = first_conn.read_range(test_url, &Range::new_usize(offset, length))?;
             let test_data_expected = &test_data[offset..offset + length];
             assert_eq!(
                 test_data_expected,

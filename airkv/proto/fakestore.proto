@@ -1,0 +1,93 @@
+// version of protocol buffer used
+syntax = "proto2";
+
+// package name for the buffer will be used later
+package fakestoreservice;
+
+// service which can be executed
+service FakeStoreService {
+// function which can be called
+  rpc Open (OpenRequest) returns (OpenResponse);
+  rpc Close (CloseRequest) returns (CloseResponse);
+  rpc Create (CreateRequest) returns (CreateResponse);
+  rpc Remove (RemoveRequest) returns (RemoveResponse);
+
+  rpc GetSize (GetSizeRequest) returns (GetSizeResponse);
+
+  rpc Append (AppendRequest) returns (AppendResponse);
+  rpc ReadAll (ReadAllRequest) returns (ReadAllResponse);
+  rpc ReadRange (ReadRangeRequest) returns (ReadRangeResponse);
+  rpc WriteAll (WriteAllRequest) returns (WriteAllResponse);
+}
+
+message Prop {
+  required string key = 1;
+  required string value = 2;
+}
+message OpenRequest {
+  required string path = 1;
+  repeated Prop props = 2;
+}
+message OpenResponse {
+  required bool status = 1;
+}
+
+message CloseRequest {
+  required string path = 1;
+}
+message CloseResponse {
+  required bool status = 1;
+}
+
+message GetSizeRequest {
+  required string path = 1;
+}
+message GetSizeResponse {
+  required uint64 size = 1;
+}
+
+message CreateRequest {
+  required string path = 1;
+}
+message CreateResponse {
+  required bool status = 1;
+}
+
+message AppendRequest {
+  required string path = 1;
+  required bytes content = 2;
+}
+message AppendResponse {
+  required bool status = 1;
+}
+
+message ReadAllRequest {
+  required string path = 1;
+}
+message ReadAllResponse {
+  required bytes content = 1;
+}
+
+message ReadRangeRequest {
+  required string path = 1;
+  required uint64 offset = 2;
+  required uint64 length = 3;
+}
+message ReadRangeResponse {
+  required bytes content = 1;
+}
+
+message WriteAllRequest {
+  required string path = 1;
+  required bytes content = 2;
+}
+message WriteAllResponse {
+  required bool status = 1;
+}
+
+message RemoveRequest { 
+  required string path = 1;
+}
+message RemoveResponse {
+  required bool status = 1;
+}
