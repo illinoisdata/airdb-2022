@@ -1,13 +1,13 @@
 use self::fakestore_service_connector::{
     fake_store_service_client::FakeStoreServiceClient, AppendRequest, CloseRequest, CreateRequest,
-    GetSizeRequest, ReadAllRequest, RemoveRequest, WriteAllRequest, ReadRangeRequest,
+    GetSizeRequest, ReadAllRequest, ReadRangeRequest, RemoveRequest, WriteAllRequest,
 };
 use super::{file_utils::Range, storage_connector::StorageConnector};
 use crate::{
     common::error::{GResult, GenericError, UnknownServerError},
     io::fake_store_service_conn::fakestore_service_connector::{OpenRequest, Prop},
 };
-use std::{collections::HashMap};
+use std::collections::HashMap;
 use tokio::runtime::Runtime;
 use tonic::transport::Channel;
 use url::Url;
@@ -42,26 +42,25 @@ impl Default for FakeStoreServiceConnector {
 }
 
 impl FakeStoreServiceConnector {
-
     async fn read_all_async(client: &mut ClientType, path: &Url) -> GResult<Vec<u8>> {
         let read_all_request = tonic::Request::new(ReadAllRequest {
             path: path.to_string(),
         });
-        let read_all_response =client 
-            .read_all(read_all_request)
-            .await?;
+        let read_all_response = client.read_all(read_all_request).await?;
         Ok(read_all_response.into_inner().content)
     }
 
-    async fn read_range_async(client: &mut ClientType, path: &Url, range: &Range) -> GResult<Vec<u8>> {
+    async fn read_range_async(
+        client: &mut ClientType,
+        path: &Url,
+        range: &Range,
+    ) -> GResult<Vec<u8>> {
         let read_range_request = tonic::Request::new(ReadRangeRequest {
             path: path.to_string(),
             offset: range.offset,
             length: range.length,
         });
-        let read_range_response =client 
-            .read_range(read_range_request)
-            .await?;
+        let read_range_response = client.read_range(read_range_request).await?;
         Ok(read_range_response.into_inner().content)
     }
 
@@ -69,9 +68,7 @@ impl FakeStoreServiceConnector {
         let get_size_request = tonic::Request::new(GetSizeRequest {
             path: path.to_string(),
         });
-        let get_size_response = client
-            .get_size(get_size_request)
-            .await?;
+        let get_size_response = client.get_size(get_size_request).await?;
         Ok(get_size_response.into_inner().size)
     }
 
@@ -79,9 +76,7 @@ impl FakeStoreServiceConnector {
         let create_request = tonic::Request::new(CreateRequest {
             path: path.to_string(),
         });
-        let create_response = client
-            .create(create_request)
-            .await?;
+        let create_response = client.create(create_request).await?;
         if create_response.into_inner().status {
             Ok(())
         } else {
@@ -97,9 +92,7 @@ impl FakeStoreServiceConnector {
             path: path.to_string(),
             content: buf.to_vec(),
         });
-        let append_response =client 
-            .append(append_request)
-            .await?;
+        let append_response = client.append(append_request).await?;
         if append_response.into_inner().status {
             Ok(())
         } else {
@@ -148,7 +141,6 @@ impl StorageConnector for FakeStoreServiceConnector {
     /// * `props` - necessary properties to initialize and  open the connection  
     ///
     fn open(&mut self, _props: &HashMap<String, String>) -> GResult<()> {
-
         self.rt.block_on(async {
             // TODO: get connection url from props
             let channel = Channel::from_static("http://[::1]:50051").connect().await?;
@@ -171,7 +163,6 @@ impl StorageConnector for FakeStoreServiceConnector {
         })
     }
 
-
     fn close(&mut self) -> GResult<()> {
         self.rt.block_on(async {
             // TODO: support real path parameter
@@ -190,58 +181,70 @@ impl StorageConnector for FakeStoreServiceConnector {
     }
 
     fn read_all(&mut self, path: &Url) -> GResult<Vec<u8>> {
-        self.rt.block_on(FakeStoreServiceConnector::read_all_async(
-            self.client.as_mut().expect("The Client is None"),
-            path,
-        ))
+        match self.client {
+            Some(ref mut client) => self
+                .rt
+                .block_on(FakeStoreServiceConnector::read_all_async(client, path)),
+            None => panic!("The Client is None"),
+        }
     }
 
     fn read_range(&mut self, path: &Url, range: &Range) -> GResult<Vec<u8>> {
-        self.rt.block_on(FakeStoreServiceConnector::read_range_async(
-            self.client.as_mut().expect("The Client is None"),
-            path,
-            range,
-        ))
+        match self.client {
+            Some(ref mut client) => self
+                .rt
+                .block_on(FakeStoreServiceConnector::read_range_async(
+                    client, path, range,
+                )),
+            None => panic!("The Client is None"),
+        }
     }
 
     fn get_size(&mut self, path: &Url) -> GResult<u64> {
-        self.rt.block_on(FakeStoreServiceConnector::get_size_async(
-            self.client.as_mut().expect("The Client is None"),
-            path,
-        ))
+        match self.client {
+            Some(ref mut client) => self
+                .rt
+                .block_on(FakeStoreServiceConnector::get_size_async(client, path)),
+            None => panic!("The Client is None"),
+        }
     }
 
     fn create(&mut self, path: &Url) -> GResult<()> {
-        self.rt.block_on(FakeStoreServiceConnector::create_async(
-            self.client.as_mut().expect("The Client is None"),
-            path,
-        ))
+        match self.client {
+            Some(ref mut client) => self
+                .rt
+                .block_on(FakeStoreServiceConnector::create_async(client, path)),
+            None => panic!("The Client is None"),
+        }
     }
-   
+
     fn append(&mut self, path: &Url, buf: &[u8]) -> GResult<()> {
-        self.rt.block_on(FakeStoreServiceConnector::append_async(
-            self.client.as_mut().expect("The Client is None"),
-            path,
-            buf,
-        ))
+        match self.client {
+            Some(ref mut client) => self
+                .rt
+                .block_on(FakeStoreServiceConnector::append_async(client, path, buf)),
+            None => panic!("The Client is None"),
+        }
     }
 
     fn write_all(&mut self, path: &Url, buf: &[u8]) -> GResult<()> {
-        self.rt.block_on(FakeStoreServiceConnector::write_all_async(
-            self.client.as_mut().expect("The Client is None"),
-            path,
-            buf,
-        ))
+        match self.client {
+            Some(ref mut client) => self.rt.block_on(FakeStoreServiceConnector::write_all_async(
+                client, path, buf,
+            )),
+            None => panic!("The Client is None"),
+        }
     }
 
     fn remove(&mut self, path: &Url) -> GResult<()> {
-        self.rt.block_on(FakeStoreServiceConnector::remove_async(
-            self.client.as_mut().expect("The Client is None"),
-            path,
-        ))
+        match self.client {
+            Some(ref mut client) => self
+                .rt
+                .block_on(FakeStoreServiceConnector::remove_async(client, path)),
+            None => panic!("The Client is None"),
+        }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -252,8 +255,14 @@ mod tests {
     use tempfile::TempDir;
     use url::Url;
 
-    use crate::{common::error::GResult, io::{fake_store_service_conn::FakeStoreServiceConnector, file_utils::{UrlUtil, FileUtil, Range}, storage_connector::StorageConnector}};
-
+    use crate::{
+        common::error::GResult,
+        io::{
+            fake_store_service_conn::FakeStoreServiceConnector,
+            file_utils::{FileUtil, Range, UrlUtil},
+            storage_connector::StorageConnector,
+        },
+    };
 
     #[test]
     fn create_remove_test() -> GResult<()> {
@@ -350,9 +359,9 @@ mod tests {
         Ok(())
     }
 
-    /// 
+    ///
     /// use the same set of tests as LocalStorageConnector to varify FakeStoreServiceConnector
-    /// 
+    ///
     #[test]
     fn write_read_range_random_ok() -> GResult<()> {
         // write some data
@@ -371,7 +380,8 @@ mod tests {
         for _ in 0..100 {
             let offset = rng.gen_range(0..test_data.len() - 1);
             let length = rng.gen_range(0..test_data.len() - offset);
-            let test_data_range = first_conn.read_range(test_url, &Range::new_usize(offset, length))?;
+            let test_data_range =
+                first_conn.read_range(test_url, &Range::new_usize(offset, length))?;
             let test_data_expected = &test_data[offset..offset + length];
             assert_eq!(
                 test_data_expected,
@@ -453,7 +463,4 @@ mod tests {
         assert_eq!(expect_buf, res_buf);
         Ok(())
     }
-    
-
-
 }
