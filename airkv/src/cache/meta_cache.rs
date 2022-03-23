@@ -4,6 +4,10 @@ use crate::{
     lsmt::{level_seg_desc::LsmTreeDesc, tree_delta::TreeDelta}, storage::{segment::SegID},
 };
 
+/// MetaIncrement describes an update to the meta segment
+/// inc_size => the increase of the meta segment size in bytes
+/// lock_reqs => lock requests
+/// tree_deltas => tree deltas
 pub struct MetaIncrement {
     inc_size: u64,
     lock_reqs: Vec<AirLockRequest>,

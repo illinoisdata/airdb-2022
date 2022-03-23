@@ -7,9 +7,11 @@ use std::{
 
 use crate::common::{dataslice::{DataSlice, SharedCacheData}, error::GResult};
 
-/// DataRange describe a part of a segment
+/// DataRange describe a part of a data segment
 /// range => the min/max position of the part in the segment
-/// data =>  the data for a part of the segment
+/// data =>  the data for a part of the segment 
+///          use SharedCacheData(Rc<RefCell<Vec<u8>>>) to denote the data/cache in order to avoid memory copy
+/// 
 pub struct DataRange {
     range: Range<u64>,
     data: SharedCacheData, 
@@ -159,14 +161,3 @@ impl DataCache {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::{cache::data_cache::DataCache, common::error::GResult};
-
-    #[test]
-    fn data_cache_test() -> GResult<()> {
-        println!("{}", DataCache::default().is_full);
-        println!("{}", (3..3).is_empty());
-        Ok(())
-    }
-}

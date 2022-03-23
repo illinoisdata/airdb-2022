@@ -1,6 +1,5 @@
+// read-only buffer
 pub trait ReadBuffer {
-
-    // fn wrap(data_new: Vec<u8>) -> Self;
 
     fn has_remaining(&self) -> bool;
 

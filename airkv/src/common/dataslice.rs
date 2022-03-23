@@ -2,6 +2,9 @@ use std::{cell::RefCell, io::Write, ops::Range, rc::Rc};
 
 pub type SharedCacheData = Rc<RefCell<Vec<u8>>>;
 
+// DataSlice describe a slice backed by a shared data vector
+// data => the shared data vector
+// range => the range of the shared data vector occupied by the current slice 
 pub struct DataSlice {
     data: SharedCacheData,
     range: Range<usize>,

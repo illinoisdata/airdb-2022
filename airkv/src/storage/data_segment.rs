@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn data_segment_ln_test() -> GResult<()> {
-        //test tail Segment
+        //test LN Segment (SegmentType::DataSegmentLn)
         let mut first_conn = FakeStoreServiceConnector::default();
         let fake_props: &HashMap<String, String> = &HashMap::new();
         first_conn.open(fake_props)?;

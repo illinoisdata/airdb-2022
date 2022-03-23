@@ -3,6 +3,8 @@ use byteorder::{BigEndian, ByteOrder};
 
 use super::{dataslice::DataSlice, readbuffer::ReadBuffer};
 
+/// a read-only buffer which will read the data in a reversed order
+/// (this is a util struct for some special segments which need reaversed read such as the tail segment and L0 segments)
 pub struct ReversedByteBuffer {
     data: DataSlice,
     rpos: usize,
@@ -74,19 +76,5 @@ impl ReadBuffer for ReversedByteBuffer {
 
     fn read_i64(&mut self) -> i64 {
         self.read_u64() as i64
-    }
-}
-
-
-#[cfg(test)]
-mod tests {
-    use crate::common::error::GResult;
-
-    #[test]
-    fn reverse_bytebuffer_test() -> GResult<()> {
-        // 
-
-
-        Ok(())
     }
 }

@@ -80,16 +80,3 @@ impl ReadBuffer for ReadByteBuffer {
         self.data.get_data(range, |x| BigEndian::read_u128(x))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::common::error::GResult;
-
-    #[test]
-    fn ready_byte_buffer_test() -> GResult<()> {
-        // 
-
-
-        Ok(())
-    }
-}
