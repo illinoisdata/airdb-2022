@@ -16,16 +16,21 @@ tempfile = "3"
 rand = "0.8.3"
 url = "2.2.2"
 derive_more = "0.99.17"
-tonic = "0.3"
-prost = "0.6"
-actix-rt = "*"
-tokio = { version = "0.2", features = ["macros"]}
+byteorder = "1.4.3"
+chrono = "0.4.19"
+tonic = "0.6"
+prost = "0.9"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+
+
 
 [build-dependencies]
-tonic-build = "0.3"
+tonic-build = "0.6"
 
 # server binary
 [[bin]]
 name = "fake_store_server"
 path = "src/bin/fake_store_server.rs"
 
+[lib]
+doctest = false

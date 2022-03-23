@@ -13,23 +13,24 @@ pub trait StorageConnector {
     fn close(&mut self) -> GResult<()>;
 
     // read whole segment specified in path
-    fn read_all(&mut self, path: &Url) -> GResult<Vec<u8>>;
+    fn read_all(&self, path: &Url) -> GResult<Vec<u8>>;
 
     // read range starting at offset for length bytes
-    fn read_range(&mut self, path: &Url, range: &Range) -> GResult<Vec<u8>>;
+    // TODO: support the case when range.length = 0, it means reading from an offset to the end of the segment
+    fn read_range(&self, path: &Url, range: &Range) -> GResult<Vec<u8>>;
 
     // get the current length of the target segment
-    fn get_size(&mut self, path: &Url) -> GResult<u64>;
+    fn get_size(&self, path: &Url) -> GResult<u64>;
 
     // create empty segment at a target path
-    fn create(&mut self, path: &Url) -> GResult<()>;
+    fn create(&self, path: &Url) -> GResult<()>;
 
     // append the byte array to the end of a target segment
-    fn append(&mut self, path: &Url, buf: &[u8]) -> GResult<()>;
+    fn append(&self, path: &Url, buf: &[u8]) -> GResult<()>;
 
     // write whole byte array to a segment
-    fn write_all(&mut self, path: &Url, buf: &[u8]) -> GResult<()>;
+    fn write_all(&self, path: &Url, buf: &[u8]) -> GResult<()>;
 
     // remove the whole segment
-    fn remove(&mut self, path: &Url) -> GResult<()>;
+    fn remove(&self, path: &Url) -> GResult<()>;
 }
