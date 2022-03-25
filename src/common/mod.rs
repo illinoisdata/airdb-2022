@@ -1,7 +1,7 @@
 // use bytes::Bytes;
-// pub type ArcBytes = Bytes;
+// pub type SharedBytes = Bytes;
 
-use std::sync::Arc;
-pub type ArcBytes = Arc<Vec<u8>>;
+use std::rc::Rc;
+pub type SharedBytes = Rc<Vec<u8>>;
 
 pub mod error;

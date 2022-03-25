@@ -4,7 +4,7 @@ use serde::{Serialize, Deserialize};
 use std::rc::Rc;
 use url::Url;
 
-use crate::common::ArcBytes;
+use crate::common::SharedBytes;
 use crate::index::GResult;
 use crate::index::Index;
 use crate::index::IndexMeta;
@@ -22,7 +22,7 @@ use crate::store::key_position::PositionT;
 #[derive(Serialize, Deserialize, Clone)]
 struct Stash {
   path: String,
-  buffer: ArcBytes,
+  buffer: SharedBytes,
 }
 
 impl Stash {

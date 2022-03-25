@@ -207,7 +207,7 @@ impl StepGreedyBuilder {
 
 impl ModelBuilder for StepGreedyBuilder {
   fn consume(&mut self, kpr: &KeyPositionRange) -> GResult<MaybeKeyBuffer> {
-    self.max_load = std::cmp::max(self.max_load, kpr.length);
+    // self.max_load = std::cmp::max(self.max_load, kpr.length);
     match &mut self.cur_kpr {
       None => {
         self.cur_kpr = Some(kpr.clone());
@@ -385,7 +385,7 @@ mod tests {
       model_loads: stm_loads,
     } = stm_builder.finalize()?;
     let model_kb_8 = assert_some_buffer(last_buffer);
-    assert_eq!(stm_loads, vec![915]);
+    assert_eq!(stm_loads, vec![30]);
 
     // check buffers
     test_same_model_box(

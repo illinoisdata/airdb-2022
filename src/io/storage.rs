@@ -8,6 +8,7 @@ use itertools::Itertools;
 use memmap2::Mmap;
 use memmap2::MmapOptions;
 use serde::Deserialize;
+use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fs::File;
@@ -16,12 +17,12 @@ use std::io::Write;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::Mutex;
 use tokio::runtime::Runtime;
 use url::Url;
 
-use crate::common::ArcBytes;
+use crate::common::SharedBytes;
 use crate::common::error::GenericError;
 use crate::common::error::GResult;
 use crate::common::error::InvalidAzureStorageUrl;
@@ -48,15 +49,15 @@ pub enum ReadRequest {
 
 /* Adaptor */
 
-pub trait Adaptor: Send + Sync + std::fmt::Debug {
+pub trait Adaptor: std::fmt::Debug {
   // read whole blob specified in path
-  fn read_all(&self, url: &Url) -> GResult<ArcBytes>;
+  fn read_all(&self, url: &Url) -> GResult<SharedBytes>;
   // read range starting at offset for length bytes
-  fn read_range(&self, url: &Url, range: &Range) -> GResult<ArcBytes>;
+  fn read_range(&self, url: &Url, range: &Range) -> GResult<SharedBytes>;
   // read range starting at offset for length bytes
   fn read_in_place(&self, url: &Url, range: &Range, buffer: &mut [u8]) -> GResult<()>;
   // generic read for supported request type
-  fn read(&self, request: &ReadRequest) -> GResult<ArcBytes> {
+  fn read(&self, request: &ReadRequest) -> GResult<SharedBytes> {
     match request {
       ReadRequest::All { url } => self.read_all(url),
       ReadRequest::Range { url, range } => self.read_range(url, range),
@@ -83,7 +84,7 @@ fn open_rfile(url: &Url) -> GResult<File> {
 
 #[derive(Debug)]
 pub struct FileSystemAdaptor {
-  rfile_dict: Arc<Mutex<HashMap<Url, Arc<File>>>>,
+  rfile_dict: Rc<RefCell<HashMap<Url, Rc<File>>>>,
 }
 
 impl Default for FileSystemAdaptor {
@@ -94,10 +95,10 @@ impl Default for FileSystemAdaptor {
 
 impl FileSystemAdaptor {
   pub fn new() -> FileSystemAdaptor {
-    FileSystemAdaptor { rfile_dict: Arc::new(Mutex::new(HashMap::new())) }
+    FileSystemAdaptor { rfile_dict: Rc::new(RefCell::new(HashMap::new())) }
   }
 
-  fn read_range_from_file(f: Arc<File>, range: &Range, buf: &mut [u8]) -> GResult<()> {
+  fn read_range_from_file(f: Rc<File>, range: &Range, buf: &mut [u8]) -> GResult<()> {
     // File::read_at might return fewer bytes than requested (e.g. 2GB at a time)
     // To read whole range, we request until the buffer is filled
     assert_eq!(buf.len(), range.length);
@@ -118,29 +119,29 @@ impl FileSystemAdaptor {
     Ok(std::fs::create_dir_all(path)?)
   }
 
-  fn open(&self, url: &Url) -> GResult<Arc<File>> {
+  fn open(&self, url: &Url) -> GResult<Rc<File>> {
     // this is or_insert_with_key with fallible insertion
-    Ok(match self.rfile_dict.lock().unwrap().entry(url.clone()) {
+    Ok(match self.rfile_dict.borrow_mut().entry(url.clone()) {
       Entry::Occupied(entry) => entry.get().clone(),
-      Entry::Vacant(entry) => entry.insert(Arc::new(open_rfile(url)?)).clone(),
+      Entry::Vacant(entry) => entry.insert(Rc::new(open_rfile(url)?)).clone(),
     })
   }
 }
 
 impl Adaptor for FileSystemAdaptor {
-  fn read_all(&self, url: &Url) -> GResult<ArcBytes> {
+  fn read_all(&self, url: &Url) -> GResult<SharedBytes> {
     self.open(url).map(|f| {
       let file_length = f.metadata()?.len();
       let range = Range { offset: 0, length: file_length as usize };
       let mut buffer = vec![0u8; range.length];
-      FileSystemAdaptor::read_range_from_file(f, &range, &mut buffer).map(|_| Arc::new(buffer))
+      FileSystemAdaptor::read_range_from_file(f, &range, &mut buffer).map(|_| Rc::new(buffer))
     })?
   }
 
-  fn read_range(&self, url: &Url, range: &Range) -> GResult<ArcBytes> {
+  fn read_range(&self, url: &Url, range: &Range) -> GResult<SharedBytes> {
     self.open(url).map(|f| {
       let mut buffer = vec![0u8; range.length];
-      FileSystemAdaptor::read_range_from_file(f, range, &mut buffer).map(|_| Arc::new(buffer))
+      FileSystemAdaptor::read_range_from_file(f, range, &mut buffer).map(|_| Rc::new(buffer))
     })?
   }
 
@@ -195,7 +196,7 @@ pub fn url_from_dir_str(path: &str) -> GResult<Url> {
 
 #[derive(Debug)]
 pub struct MmapAdaptor {
-  mmap_dict: Arc<Mutex<HashMap<Url, Arc<Mmap>>>>,
+  mmap_dict: Rc<RefCell<HashMap<Url, Rc<Mmap>>>>,
   fs_adaptor: FileSystemAdaptor,
 }
 
@@ -220,20 +221,20 @@ impl Default for MmapAdaptor {
 impl MmapAdaptor {
   pub fn new() -> MmapAdaptor {
     MmapAdaptor {
-      mmap_dict: Arc::new(Mutex::new(HashMap::new())),
+      mmap_dict: Rc::new(RefCell::new(HashMap::new())),
       fs_adaptor: FileSystemAdaptor::new(),
     }
   }
 
-  fn map(&self, url: &Url) -> GResult<Arc<Mmap>> {
+  fn map(&self, url: &Url) -> GResult<Rc<Mmap>> {
     // this is or_insert_with_key with fallible insertion
-    Ok(match self.mmap_dict.lock().unwrap().entry(url.clone()) {
+    Ok(match self.mmap_dict.borrow_mut().entry(url.clone()) {
       Entry::Occupied(entry) => entry.get().clone(),
-      Entry::Vacant(entry) => entry.insert(Arc::new(new_mmap(url)?)).clone(),
+      Entry::Vacant(entry) => entry.insert(Rc::new(new_mmap(url)?)).clone(),
     })
   }
 
-  fn try_map(&self, url: &Url) -> Option<Arc<Mmap>> {
+  fn try_map(&self, url: &Url) -> Option<Rc<Mmap>> {
     match self.map(url) {
       Ok(mmap) => Some(mmap),  // TODO: avoid copy?
       Err(e) => {
@@ -244,24 +245,24 @@ impl MmapAdaptor {
   }
 
   fn unmap(&self, url: &Url) -> GResult<()> {
-    self.mmap_dict.lock().unwrap().remove(url);
+    self.mmap_dict.borrow_mut().remove(url);
     Ok(())
   }
 }
 
 impl Adaptor for MmapAdaptor {
-  fn read_all(&self, url: &Url) -> GResult<ArcBytes> {
+  fn read_all(&self, url: &Url) -> GResult<SharedBytes> {
     match self.try_map(url) {
-      Some(mmap) => Ok(Arc::new(mmap.to_vec())),  // TODO: avoid copy?
+      Some(mmap) => Ok(Rc::new(mmap.to_vec())),  // TODO: avoid copy?
       None => self.fs_adaptor.read_all(url),
     }
   }
 
-  fn read_range(&self, url: &Url, range: &Range) -> GResult<ArcBytes> {
+  fn read_range(&self, url: &Url, range: &Range) -> GResult<SharedBytes> {
     match self.try_map(url) {
       Some(mmap) => {
         let offset_r = std::cmp::min(mmap.len(), range.offset+range.length);
-        Ok(Arc::new(mmap[range.offset..offset_r].to_vec()))  // TODO: avoid copy?
+        Ok(Rc::new(mmap[range.offset..offset_r].to_vec()))  // TODO: avoid copy?
       }
       None => self.fs_adaptor.read_range(url, range),
     }
@@ -361,21 +362,21 @@ impl AzureStorageAdaptor {
     Ok(self.storage_client.as_container_client(container_name).as_blob_client(&blob_name))
   }
 
-  async fn read_all_async(&self, url: &Url) -> GResult<ArcBytes> {
+  async fn read_all_async(&self, url: &Url) -> GResult<SharedBytes> {
     let blob_response = self.blob_client(url)?
       .get()
       .execute()
       .await?;
-    Ok(Arc::new(blob_response.data.to_vec()))
+    Ok(Rc::new(blob_response.data.to_vec()))
   }
 
-  async fn read_range_async(&self, url: &Url, range: &Range) -> GResult<ArcBytes> {
+  async fn read_range_async(&self, url: &Url, range: &Range) -> GResult<SharedBytes> {
     let blob_response = self.blob_client(url)?
       .get()
       .range(AzureRange::new(range.offset.try_into().unwrap(), (range.offset + range.length).try_into().unwrap()))
       .execute()
       .await?;
-    Ok(Arc::new(blob_response.data.to_vec()))
+    Ok(Rc::new(blob_response.data.to_vec()))
   }
 
   async fn write_all_async(&self, url: &Url, buf: &[u8]) -> GResult<()> {
@@ -410,11 +411,11 @@ impl AzureStorageAdaptor {
 }
 
 impl Adaptor for AzureStorageAdaptor {
-  fn read_all(&self, url: &Url) -> GResult<ArcBytes> {
+  fn read_all(&self, url: &Url) -> GResult<SharedBytes> {
     self.rt.block_on(self.read_all_async(url))
   }
 
-  fn read_range(&self, url: &Url, range: &Range) -> GResult<ArcBytes> {
+  fn read_range(&self, url: &Url, range: &Range) -> GResult<SharedBytes> {
     self.rt.block_on(self.read_range_async(url, range))
   }
 

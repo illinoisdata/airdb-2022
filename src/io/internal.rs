@@ -1,11 +1,11 @@
 use moka::sync::Cache;
-// use rayon::prelude::*;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::RwLock;
 use url::Url;
 
-use crate::common::ArcBytes;
+use crate::common::SharedBytes;
 use crate::common::error::ConflictingStorageScheme;
 use crate::common::error::GResult;
 use crate::common::error::UnavailableStorageScheme;
@@ -19,9 +19,9 @@ use crate::io::storage::ReadRequest;
 /* Common io interface */
 
 pub struct ExternalStorage {
-  adaptors: HashMap<String, Arc<Box<dyn Adaptor>>>,
+  adaptors: HashMap<String, Rc<Box<dyn Adaptor>>>,
   schemes: Vec<String>,  // HACK: for error reporting
-  page_cache: Cache<Url, ArcIntervalCache>,
+  page_cache: Cache<Url, SharedIntervalCache>,
   page_size: usize,
   read_unit_size: usize,
 }
@@ -55,7 +55,7 @@ impl ExternalStorage {
       adaptors: HashMap::new(),
       schemes: Vec::new(),
       page_cache: Cache::builder()
-        .weigher(|_key, value: &ArcIntervalCache| -> u32 {
+        .weigher(|_key, value: &SharedIntervalCache| -> u32 {
           value.read().unwrap().len().try_into().unwrap()
         })
         .max_capacity(cache_size)
@@ -77,12 +77,12 @@ impl ExternalStorage {
     }
 
     // new scheme
-    self.adaptors.insert(scheme.clone(), Arc::new(adaptor));
+    self.adaptors.insert(scheme.clone(), Rc::new(adaptor));
     self.schemes.push(scheme);
     Ok(())
   }
 
-  pub fn read_batch_sequential(&self, requests: &[ReadRequest]) -> GResult<Vec<ArcBytes>> {
+  pub fn read_batch_sequential(&self, requests: &[ReadRequest]) -> GResult<Vec<SharedBytes>> {
     // TODO: async this?
     requests
       // .par_iter()
@@ -91,7 +91,7 @@ impl ExternalStorage {
       .collect()
   }
 
-  fn select_adaptor(&self, url: &Url) -> GResult<Arc<Box<dyn Adaptor>>> {
+  fn select_adaptor(&self, url: &Url) -> GResult<Rc<Box<dyn Adaptor>>> {
     let scheme = url.scheme().to_string();
     match self.adaptors.get(&scheme) {
       Some(entry) => Ok(entry.clone()),
@@ -102,7 +102,7 @@ impl ExternalStorage {
 
 // cache-related logics
 
-type ArcIntervalCache = Arc<RwLock<IntervalCache>>;
+type SharedIntervalCache = Arc<RwLock<IntervalCache>>;
 
 struct IntervalCache {
   cache_offset: usize,
@@ -122,7 +122,7 @@ impl std::fmt::Debug for IntervalCache {
 }
 
 impl IntervalCache {
-  fn new(cache_offset: usize, length: usize, read_unit: usize) -> ArcIntervalCache {
+  fn new(cache_offset: usize, length: usize, read_unit: usize) -> SharedIntervalCache {
     assert!(length % read_unit == 0);
     Arc::new(RwLock::new(IntervalCache {
       cache_offset,
@@ -132,7 +132,7 @@ impl IntervalCache {
     }))
   }
 
-  fn from_filled(cache_offset: usize, buffer: Vec<u8>, read_unit: usize) -> ArcIntervalCache {
+  fn from_filled(cache_offset: usize, buffer: Vec<u8>, read_unit: usize) -> SharedIntervalCache {
     let intervals = Intervals::full(
       buffer.len() / read_unit + (buffer.len() % read_unit != 0) as usize
     );
@@ -204,7 +204,7 @@ impl IntervalCache {
 
 impl ExternalStorage {
 
-  pub fn warm_cache(&self, url: &Url, url_buffer: &ArcBytes) {
+  pub fn warm_cache(&self, url: &Url, url_buffer: &SharedBytes) {
     assert!(url.query().is_none());
     let buffer_range = Range { offset: 0, length: url_buffer.len()};
     self.range_to_pages(&buffer_range)
@@ -222,11 +222,11 @@ impl ExternalStorage {
     log::debug!("Warmed up cache for {:?}", url.to_string());
   }
 
-  fn fill_in_range(&self, cache_line: &mut ArcIntervalCache, url: &Url, range: &Range) -> GResult<()> {
+  fn fill_in_range(&self, cache_line: &mut SharedIntervalCache, url: &Url, range: &Range) -> GResult<()> {
     cache_line.write().unwrap().fill_if_missing(self, url, range)
   }
 
-  fn read_through_page(&self, url: &Url, page_idx: usize, range: &Range) -> GResult<(usize, ArcIntervalCache)> {
+  fn read_through_page(&self, url: &Url, page_idx: usize, range: &Range) -> GResult<(usize, SharedIntervalCache)> {
     // make url with page idx
     let paged_url = self.paged_url(url.clone(), page_idx);
 
@@ -261,14 +261,14 @@ impl ExternalStorage {
 }
 
 impl Adaptor for ExternalStorage {
-  fn read_all(&self, url: &Url) -> GResult<ArcBytes> {
+  fn read_all(&self, url: &Url) -> GResult<SharedBytes> {
     self.select_adaptor(url)?.read_all(url)
   }
 
-  fn read_range(&self, url: &Url, range: &Range) -> GResult<ArcBytes> {
+  fn read_range(&self, url: &Url, range: &Range) -> GResult<SharedBytes> {
     let mut buffer = vec![0u8; range.length];
     self.read_in_place(url, range, &mut buffer)?;
-    Ok(Arc::new(buffer))
+    Ok(Rc::new(buffer))
   }
 
   fn read_in_place(&self, url: &Url, range: &Range, buffer: &mut [u8]) -> GResult<()> {
@@ -276,7 +276,7 @@ impl Adaptor for ExternalStorage {
     let pages = self.range_to_pages(range)
       // .into_par_iter()
       .map(|page_idx| self.read_through_page(url, page_idx, range))
-      .collect::<GResult<Vec<(usize, ArcIntervalCache)>>>()?;
+      .collect::<GResult<Vec<(usize, SharedIntervalCache)>>>()?;
 
     // concatenate page
     for (page_idx, page_cache) in pages {

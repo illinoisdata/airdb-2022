@@ -4,7 +4,7 @@ use std::fmt;
 use std::rc::Rc;
 use url::Url;
 
-use crate::common::ArcBytes;
+use crate::common::SharedBytes;
 use crate::common::error::GenericError;
 use crate::common::error::GResult;
 use crate::common::error::IncompleteDataStoreFromMeta;
@@ -99,7 +99,7 @@ impl ArrayStore {
       self.storage.borrow().write_all(&self.array_url, array_buffer)
   }
 
-  fn read_page_range(&self, offset: PositionT, length: PositionT) -> GResult<(ArcBytes, usize)> {
+  fn read_page_range(&self, offset: PositionT, length: PositionT) -> GResult<(SharedBytes, usize)> {
     // calculate first and last "page" indexes
     let end_offset = offset + length;
     let start_rank = offset / self.state.data_size + (offset % self.state.data_size != 0) as usize;
@@ -227,7 +227,7 @@ impl<'a> DataStoreWriter for ArrayStoreWriter<'a> {
 /* Reader */
 
 pub struct ArrayStoreReader {
-  array_buffer: ArcBytes,
+  array_buffer: SharedBytes,
   start_rank: usize,
   data_size: usize,
 }
@@ -244,7 +244,7 @@ pub struct ArrayStoreReaderIterWithRank<'a> {
 }
 
 impl ArrayStoreReader {
-  fn new(array_buffer: ArcBytes, start_rank: usize, data_size: usize) -> ArrayStoreReader {
+  fn new(array_buffer: SharedBytes, start_rank: usize, data_size: usize) -> ArrayStoreReader {
     ArrayStoreReader {
       array_buffer,
       start_rank,
