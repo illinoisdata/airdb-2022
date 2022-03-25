@@ -265,6 +265,28 @@ impl ArrayStoreReader {
     let offset = idx * self.data_size;
     KeyBuffer::deserialize(&self.array_buffer[offset .. offset + self.data_size])
   }
+
+  pub fn first_of_with_rank(&self, key: KeyT) -> GResult<(KeyBuffer, usize)> {
+    // binary search
+    assert!(self.array_buffer.len() % self.data_size == 0);
+    let mut l = 0;
+    let mut r = self.array_buffer.len() / self.data_size ;
+    while l + 1 < r {
+      let mid = l + (r - l) / 2;
+      let mid_key = self.key_at(mid);
+      match mid_key.cmp(&key) {  // smallest mid_key <= key
+          std::cmp::Ordering::Less => { l = mid },
+          std::cmp::Ordering::Equal => { r = mid },
+          std::cmp::Ordering::Greater => { r = mid },
+      }
+    }
+    let idx = if r < self.array_buffer.len() / self.data_size && self.key_at(r) == key { r } else { l };
+    if idx < self.array_buffer.len() / self.data_size {
+      let kb = self.kb_at(idx);
+      return Ok((kb, idx + self.start_rank));
+    }
+    Err(Box::new(OutofCoverageError) as GenericError)
+  }
 }
 
 impl DataStoreReader for ArrayStoreReader {
@@ -273,26 +295,7 @@ impl DataStoreReader for ArrayStoreReader {
   }
 
   fn first_of(&self, key: KeyT) -> GResult<KeyBuffer> {
-    // binary search
-    assert!(self.array_buffer.len() % self.data_size == 0);
-    let mut l = 0;
-    let mut r = self.array_buffer.len() / self.data_size - 1;
-    while l < r {
-      let mid = (l + r + 1) / 2;
-      let mid_key = self.key_at(mid);
-      match mid_key.cmp(&key) {
-          std::cmp::Ordering::Less => { l = mid },
-          std::cmp::Ordering::Equal => { l = mid },
-          std::cmp::Ordering::Greater => { r = mid - 1 },
-      }
-    }
-    if l < self.array_buffer.len() / self.data_size {
-      let kb = self.kb_at(l);
-      if kb.key <= key {
-        return Ok(kb);
-      }
-    }
-    Err(Box::new(OutofCoverageError) as GenericError)
+    self.first_of_with_rank(key).map(|(kb, _rank)| kb)
   }
 }
 

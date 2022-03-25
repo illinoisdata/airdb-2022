@@ -34,7 +34,7 @@ const CONT_FLAG: FlagT = 0;
 fn write_page(page: &mut [u8], flag: FlagT, kv_chunk: &[u8]) {
   // TODO: move CONT_FLAG < 0, then write only one byte
   let chunk_length = kv_chunk.len();
-  page[..FLAG_LENGTH].clone_from_slice(&flag.to_be_bytes());
+  page[..FLAG_LENGTH].clone_from_slice(&flag.to_le_bytes());
   page[FLAG_LENGTH..FLAG_LENGTH+chunk_length].clone_from_slice(kv_chunk);
 }
 
@@ -42,7 +42,7 @@ fn read_page(page: &[u8]) -> (FlagT, &[u8]) {
   // TODO: if leading bit is 1 --> CONT_FLAG
   let mut flag_bytes = [0u8; FLAG_LENGTH];
   flag_bytes[..FLAG_LENGTH].clone_from_slice(&page[..FLAG_LENGTH]);
-  (FlagT::from_be_bytes(flag_bytes), &page[FLAG_LENGTH..])
+  (FlagT::from_le_bytes(flag_bytes), &page[FLAG_LENGTH..])
 }
 
 

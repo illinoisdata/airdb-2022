@@ -25,20 +25,20 @@ impl KeyBuffer {  // maybe implement in Serializer, Deserializer instead?
   pub fn serialize(&self) -> Vec<u8> {
     // TODO: return reference by concat slices
     let mut serialized_buffer = vec![0u8; KEY_LENGTH + self.buffer.len()];
-    serialized_buffer[..KEY_LENGTH].clone_from_slice(&self.key.to_be_bytes());
+    serialized_buffer[..KEY_LENGTH].clone_from_slice(&self.key.to_le_bytes());
     serialized_buffer[KEY_LENGTH..].clone_from_slice(&self.buffer);
     serialized_buffer
   }
 
   pub fn deserialize(serialized_buffer: &[u8]) -> KeyBuffer {
     KeyBuffer {
-      key: KeyT::from_be_bytes(serialized_buffer[..KEY_LENGTH].try_into().unwrap()),
+      key: KeyT::from_le_bytes(serialized_buffer[..KEY_LENGTH].try_into().unwrap()),
       buffer: serialized_buffer[KEY_LENGTH..].to_vec(),
     }
   }
 
   pub fn deserialize_key(serialized_buffer: &[u8]) -> KeyT {
-    KeyT::from_be_bytes(serialized_buffer[..KEY_LENGTH].try_into().unwrap())
+    KeyT::from_le_bytes(serialized_buffer[..KEY_LENGTH].try_into().unwrap())
   }
 
   pub fn serialized_size(&self) -> usize {

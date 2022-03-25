@@ -56,16 +56,13 @@ impl SOSDRankDB {
       .expect("Index missing, trying to accessing empty data store")
       .predict(&key)?;
     let reader = self.array_store.read_array_within(kpr.offset, kpr.length)?;
-    log::trace!("received rank buffer from {:?}", kpr);
-    // TODO binary search this part
-    for (idx, (dbuffer, rank)) in reader.iter_with_rank().enumerate() {
-      let current_key = self.deserialize_key(dbuffer);
-      if current_key == key {
-        log::trace!("found rank at idx= {}", idx);
-        return Ok(Some(KeyRank{ key: current_key, rank }));
-      }
+    log::trace!("received rank buffer in {:?}", kpr);
+    let (kb, rank) = reader.first_of_with_rank(key)?;
+    if kb.key == key {
+      Ok(Some(KeyRank{ key: kb.key, rank }))
+    } else {
+      Ok(None)  // no entry with matching key
     }
-    Ok(None)  // no entry with matching key
   }
 
   pub fn reconstruct_key_positions(&self) -> GResult<KeyPositionCollection> {
