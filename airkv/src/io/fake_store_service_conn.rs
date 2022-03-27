@@ -1,13 +1,12 @@
 use self::fakestore_service_connector::{
-    fake_store_service_client::FakeStoreServiceClient, AppendRequest, CloseRequest, CreateRequest,
+    fake_store_service_client::FakeStoreServiceClient, AppendRequest, CreateRequest,
     GetSizeRequest, ReadAllRequest, ReadRangeRequest, RemoveRequest, WriteAllRequest,
 };
 use super::{file_utils::Range, storage_connector::StorageConnector};
 use crate::{
     common::error::{GResult, GenericError, UnknownServerError},
-    io::fake_store_service_conn::fakestore_service_connector::{OpenRequest, Prop},
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, cell::RefCell};
 use tokio::runtime::Runtime;
 use tonic::transport::Channel;
 use url::Url;
@@ -28,7 +27,7 @@ type ClientType = FakeStoreServiceClient<Channel>;
 ///
 ///
 pub struct FakeStoreServiceConnector {
-    client: Option<ClientType>,
+    client: Option<RefCell<ClientType>>,
     rt: Runtime,
 }
 
@@ -37,6 +36,7 @@ impl Default for FakeStoreServiceConnector {
         Self {
             client: None,
             rt: Runtime::new().expect("Failed to initialize tokio runtime"),
+
         }
     }
 }
@@ -144,103 +144,112 @@ impl StorageConnector for FakeStoreServiceConnector {
         self.rt.block_on(async {
             // TODO: get connection url from props
             let channel = Channel::from_static("http://[::1]:50051").connect().await?;
-            self.client = Some(FakeStoreServiceClient::new(channel));
-            // TODO: support real path parameter
-            let fake_path = "fake_path".to_owned();
-            let fake_props: Vec<Prop> = vec![];
-            let open_request = tonic::Request::new(OpenRequest {
-                path: fake_path,
-                props: fake_props,
-            });
-            let create_response = self.client.as_mut().unwrap().open(open_request).await?;
-            if create_response.into_inner().status {
+            self.client = Some(RefCell::new(FakeStoreServiceClient::new(channel)));
+            // // TODO: support real path parameter
+            // let fake_path = "fake_path".to_owned();
+            // let fake_props: Vec<Prop> = vec![];
+            // let open_request = tonic::Request::new(OpenRequest {
+            //     path: fake_path,
+            //     props: fake_props,
+            // });
+            // // let create_response = self.client.as_mut().unwrap().open(open_request).await?;
+            // // let create_response =  match self.client {
+            // //     Some(client) => client.get_mut().open(open_request).await?,
+            // //     None => panic!("The Client is None"),
+            // // };
+            // // if create_response.into_inner().status {
                 Ok(())
-            } else {
-                Err(Box::new(UnknownServerError::new(
-                    "unexpected response from server for open()".to_owned(),
-                )) as GenericError)
-            }
+            // } else {
+            //     Err(Box::new(UnknownServerError::new(
+            //         "unexpected response from server for open()".to_owned(),
+            //     )) as GenericError)
+            // }
         })
     }
 
     fn close(&mut self) -> GResult<()> {
         self.rt.block_on(async {
-            // TODO: support real path parameter
-            let fake_path = "fake_path".to_owned();
-            let close_request = tonic::Request::new(CloseRequest { path: fake_path });
-            let close_response = self.client.as_mut().unwrap().close(close_request).await?;
-            if close_response.into_inner().status {
-                //TODO: close the client?
+            // // TODO: support real path parameter
+            // let fake_path = "fake_path".to_owned();
+            // let close_request = tonic::Request::new(CloseRequest { path: fake_path });
+            // // let close_response = self.client.as_mut().unwrap().close(close_request).await?;
+            // let close_response =  match self.client {
+            //     Some(client) => client.get_mut().close(close_request).await?,
+            //     None => panic!("The Client is None"),
+            // };
+
+            // if close_response.into_inner().status {
+            //     //TODO: close the client?
                 Ok(())
-            } else {
-                Err(Box::new(UnknownServerError::new(
-                    "unexpected response from server for close()".to_owned(),
-                )) as GenericError)
-            }
+            // } else {
+            //     Err(Box::new(UnknownServerError::new(
+            //         "unexpected response from server for close()".to_owned(),
+            //     )) as GenericError)
+            // }
         })
     }
 
-    fn read_all(&mut self, path: &Url) -> GResult<Vec<u8>> {
+    fn read_all(&self, path: &Url) -> GResult<Vec<u8>> {
         match self.client {
-            Some(ref mut client) => self
+            Some(ref client) => self
                 .rt
-                .block_on(FakeStoreServiceConnector::read_all_async(client, path)),
+                .block_on(FakeStoreServiceConnector::read_all_async(&mut client.borrow_mut(), path)),
             None => panic!("The Client is None"),
         }
     }
 
-    fn read_range(&mut self, path: &Url, range: &Range) -> GResult<Vec<u8>> {
+    fn read_range(&self, path: &Url, range: &Range) -> GResult<Vec<u8>> {
         match self.client {
-            Some(ref mut client) => self
+            Some(ref client) => self
                 .rt
                 .block_on(FakeStoreServiceConnector::read_range_async(
-                    client, path, range,
+                    &mut client.borrow_mut(), path, range,
                 )),
             None => panic!("The Client is None"),
         }
     }
 
-    fn get_size(&mut self, path: &Url) -> GResult<u64> {
+    fn get_size(&self, path: &Url) -> GResult<u64> {
         match self.client {
-            Some(ref mut client) => self
+            Some(ref client) => self
                 .rt
-                .block_on(FakeStoreServiceConnector::get_size_async(client, path)),
+                .block_on(FakeStoreServiceConnector::get_size_async(&mut client.borrow_mut(), path)),
             None => panic!("The Client is None"),
         }
     }
 
-    fn create(&mut self, path: &Url) -> GResult<()> {
+    fn create(&self, path: &Url) -> GResult<()> {
         match self.client {
-            Some(ref mut client) => self
+            Some(ref client) => self
                 .rt
-                .block_on(FakeStoreServiceConnector::create_async(client, path)),
+                .block_on(FakeStoreServiceConnector::create_async(&mut client.borrow_mut(), path)),
             None => panic!("The Client is None"),
         }
     }
 
-    fn append(&mut self, path: &Url, buf: &[u8]) -> GResult<()> {
+    fn append(&self, path: &Url, buf: &[u8]) -> GResult<()> {
         match self.client {
-            Some(ref mut client) => self
+            Some(ref client) => self
                 .rt
-                .block_on(FakeStoreServiceConnector::append_async(client, path, buf)),
+                .block_on(FakeStoreServiceConnector::append_async(&mut client.borrow_mut(), path, buf)),
             None => panic!("The Client is None"),
         }
     }
 
-    fn write_all(&mut self, path: &Url, buf: &[u8]) -> GResult<()> {
+    fn write_all(&self, path: &Url, buf: &[u8]) -> GResult<()> {
         match self.client {
-            Some(ref mut client) => self.rt.block_on(FakeStoreServiceConnector::write_all_async(
-                client, path, buf,
+            Some(ref client) => self.rt.block_on(FakeStoreServiceConnector::write_all_async(
+                &mut client.borrow_mut(), path, buf,
             )),
             None => panic!("The Client is None"),
         }
     }
 
-    fn remove(&mut self, path: &Url) -> GResult<()> {
+    fn remove(&self, path: &Url) -> GResult<()> {
         match self.client {
-            Some(ref mut client) => self
+            Some(ref client) => self
                 .rt
-                .block_on(FakeStoreServiceConnector::remove_async(client, path)),
+                .block_on(FakeStoreServiceConnector::remove_async(&mut client.borrow_mut(), path)),
             None => panic!("The Client is None"),
         }
     }
@@ -379,7 +388,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         for _ in 0..100 {
             let offset = rng.gen_range(0..test_data.len() - 1);
-            let length = rng.gen_range(0..test_data.len() - offset);
+            let length = rng.gen_range(1..test_data.len() - offset);
             let test_data_range =
                 first_conn.read_range(test_url, &Range::new_usize(offset, length))?;
             let test_data_expected = &test_data[offset..offset + length];

@@ -8,6 +8,7 @@ use url::Url;
 
 use crate::common::error::{GResult, GenericError, UrlParseFilePathError};
 
+/// if the length is 0, it means the range is from the offset to the end
 pub struct Range {
     pub offset: u64,
     pub length: u64,
@@ -19,7 +20,37 @@ impl Range {
     }
 
     pub fn new_usize(offset: usize, length: usize) -> Self {
-        Self { offset: offset as u64, length:length as u64 }
+        Self {
+            offset: offset as u64,
+            length: length as u64,
+        }
+    }
+
+    pub fn reach_seg_end(&self) -> bool {
+        self.length == 0
+    }
+
+    pub fn transfer_from(std_range: &std::ops::Range<u64>) -> Self {
+        // std_range.end == 0 means the range is from the start to the end of the segment
+        if std_range.end == 0 {
+            Self {
+                offset: std_range.start,
+                length: 0,
+            }
+        } else {
+            Self {
+                offset: std_range.start,
+                length: std_range.end - std_range.start,
+            }
+        }
+    }
+
+    pub fn transfer_to(&self) -> std::ops::Range<u64> {
+        if self.length == 0 {
+            self.offset..0
+        } else {
+            self.offset..self.offset + self.length
+        }
     }
 }
 
@@ -47,7 +78,13 @@ impl FileUtil {
 
     pub fn read_range_from_file(mut f: File, range: &Range) -> GResult<Vec<u8>> {
         f.seek(SeekFrom::Start(range.offset as u64))?;
-        let mut buf = vec![0u8; range.length as usize];
+        // range.length == 0 stands for read to the end
+        let mut buf = if range.length == 0 {
+            let file_length = f.metadata()?.len();
+            vec![0u8; (file_length - range.offset) as usize]
+        } else {
+            vec![0u8; range.length as usize]
+        };
         f.read_exact(&mut buf)?;
         Ok(buf)
     }

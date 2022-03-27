@@ -1,6 +1,6 @@
+use airkv::io::fake_store_service::fakestoreservice::fake_store_service_server::FakeStoreServiceServer;
 use airkv::io::fake_store_service::ServiceImpl;
 use tonic::transport::Server;
-use airkv::io::fake_store_service::fakestoreservice::fake_store_service_server::FakeStoreServiceServer;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
