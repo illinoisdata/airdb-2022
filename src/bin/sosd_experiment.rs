@@ -335,7 +335,7 @@ impl Experiment {
   pub fn benchmark(&self, args: &Cli) -> GResult<(Vec<u128>, Vec<usize>)> {
     // read keyset
     let keyset_bytes = self.storage.borrow().read_all(&self.keyset_url)?;
-    let test_keyset = read_keyset(&keyset_bytes)?;
+    let test_keyset = read_keyset(&keyset_bytes[..])?;
     let num_samples = match args.num_samples {
       Some(num_samples) => num_samples,
       None => test_keyset.len(),
@@ -381,7 +381,7 @@ impl Experiment {
       .borrow()
       .read_all(&self.db_meta()?)?;
     log::trace!("Loaded metadata of {} bytes", meta_bytes.len());
-    let meta = meta::deserialize(&meta_bytes)?;
+    let meta = meta::deserialize(&meta_bytes[..])?;
     log::trace!("Deserialized metadata");
     SOSDRankDB::from_meta(meta, &self.sosd_context, &self.db_context)
   }

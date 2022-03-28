@@ -268,7 +268,7 @@ impl Adaptor for ExternalStorage {
   fn read_range(&self, url: &Url, range: &Range) -> GResult<SharedBytes> {
     let mut buffer = vec![0u8; range.length];
     self.read_in_place(url, range, &mut buffer)?;
-    Ok(Rc::new(buffer))
+    Ok(SharedBytes::from(buffer))
   }
 
   fn read_in_place(&self, url: &Url, range: &Range, buffer: &mut [u8]) -> GResult<()> {
@@ -378,7 +378,7 @@ mod tests {
     let (resource_dir, fsa) = fsa_resources_setup()?;
     let es = ExternalStorage::new_with_cache(65536, 100, 10).with("file".to_string(), Box::new(fsa))?;
     let buf = es.read_all(&resource_dir.join("small.txt")?)?;
-    let read_string = match std::str::from_utf8(&buf) {
+    let read_string = match std::str::from_utf8(&buf[..]) {
       Ok(v) => v,
       Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
     };

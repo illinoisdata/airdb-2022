@@ -302,7 +302,7 @@ impl DataStoreReader for ArrayStoreReader {
 impl<'a> ArrayStoreReaderIter<'a> {
   fn next_block(&mut self) -> Option<&[u8]> {
     if self.current_offset < self.r.array_buffer.len() {
-      let dbuffer = &self.r.array_buffer[self.current_offset..self.current_offset+self.r.data_size];
+      let dbuffer = &self.r.array_buffer[self.current_offset .. self.current_offset + self.r.data_size];
       self.current_offset += self.r.data_size;
       Some(dbuffer)
     } else {
@@ -326,7 +326,7 @@ impl<'a> Iterator for ArrayStoreReaderIterWithRank<'a> {
   
   fn next(&mut self) -> Option<Self::Item> {
     if self.current_offset < self.r.array_buffer.len() {
-      let dbuffer = &self.r.array_buffer[self.current_offset..self.current_offset+self.r.data_size];
+      let dbuffer = &self.r.array_buffer[self.current_offset .. self.current_offset + self.r.data_size];
       let drank = self.rank;
       self.current_offset += self.r.data_size;
       self.rank += 1;

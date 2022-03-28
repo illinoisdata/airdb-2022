@@ -134,14 +134,16 @@ impl Adaptor for FileSystemAdaptor {
       let file_length = f.metadata()?.len();
       let range = Range { offset: 0, length: file_length as usize };
       let mut buffer = vec![0u8; range.length];
-      FileSystemAdaptor::read_range_from_file(f, &range, &mut buffer).map(|_| Rc::new(buffer))
+      FileSystemAdaptor::read_range_from_file(f, &range, &mut buffer)
+        .map(|_| SharedBytes::from(buffer))
     })?
   }
 
   fn read_range(&self, url: &Url, range: &Range) -> GResult<SharedBytes> {
     self.open(url).map(|f| {
       let mut buffer = vec![0u8; range.length];
-      FileSystemAdaptor::read_range_from_file(f, range, &mut buffer).map(|_| Rc::new(buffer))
+      FileSystemAdaptor::read_range_from_file(f, range, &mut buffer)
+        .map(|_| SharedBytes::from(buffer))
     })?
   }
 
@@ -253,7 +255,7 @@ impl MmapAdaptor {
 impl Adaptor for MmapAdaptor {
   fn read_all(&self, url: &Url) -> GResult<SharedBytes> {
     match self.try_map(url) {
-      Some(mmap) => Ok(Rc::new(mmap.to_vec())),  // TODO: avoid copy?
+      Some(mmap) => Ok(SharedBytes::from(mmap.to_vec())),  // TODO: avoid copy?
       None => self.fs_adaptor.read_all(url),
     }
   }
@@ -262,7 +264,7 @@ impl Adaptor for MmapAdaptor {
     match self.try_map(url) {
       Some(mmap) => {
         let offset_r = std::cmp::min(mmap.len(), range.offset+range.length);
-        Ok(Rc::new(mmap[range.offset..offset_r].to_vec()))  // TODO: avoid copy?
+        Ok(SharedBytes::from(mmap[range.offset..offset_r].to_vec()))  // TODO: avoid copy?
       }
       None => self.fs_adaptor.read_range(url, range),
     }
@@ -367,7 +369,7 @@ impl AzureStorageAdaptor {
       .get()
       .execute()
       .await?;
-    Ok(Rc::new(blob_response.data.to_vec()))
+    Ok(SharedBytes::from(blob_response.data.to_vec()))
   }
 
   async fn read_range_async(&self, url: &Url, range: &Range) -> GResult<SharedBytes> {
@@ -376,7 +378,7 @@ impl AzureStorageAdaptor {
       .range(AzureRange::new(range.offset.try_into().unwrap(), (range.offset + range.length).try_into().unwrap()))
       .execute()
       .await?;
-    Ok(Rc::new(blob_response.data.to_vec()))
+    Ok(SharedBytes::from(blob_response.data.to_vec()))
   }
 
   async fn write_all_async(&self, url: &Url, buf: &[u8]) -> GResult<()> {
@@ -421,7 +423,7 @@ impl Adaptor for AzureStorageAdaptor {
 
   fn read_in_place(&self, url: &Url, range: &Range, buffer: &mut [u8]) -> GResult<()> {
     let read_bytes = self.rt.block_on(self.read_range_async(url, range))?;
-    buffer.clone_from_slice(&read_bytes);
+    buffer.clone_from_slice(&read_bytes[..]);
     Ok(())
   }
 
@@ -628,7 +630,7 @@ mod tests {
   fn fsa_read_all_ok() -> GResult<()> {
     let (resource_dir, fsa) = fsa_resources_setup()?;
     let buf = fsa.read_all(&resource_dir.join("small.txt")?)?;
-    let read_string = match std::str::from_utf8(&buf) {
+    let read_string = match std::str::from_utf8(&buf[..]) {
       Ok(v) => v,
       Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
     };
@@ -693,7 +695,7 @@ mod tests {
   fn mfsa_read_all_ok() -> GResult<()> {
     let (resource_dir, mfsa) = mfsa_resources_setup()?;
     let buf = mfsa.read_all(&resource_dir.join("small.txt")?)?;
-    let read_string = match std::str::from_utf8(&buf) {
+    let read_string = match std::str::from_utf8(&buf[..]) {
       Ok(v) => v,
       Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
     };

@@ -13,6 +13,7 @@ use structopt::StructOpt;
 use airindex::common::error::GResult;
 use airindex::io::internal::ExternalStorage;
 use airindex::io::storage::Adaptor;
+use airindex::io::storage::AzureStorageAdaptor;
 use airindex::io::storage::FileSystemAdaptor;
 use airindex::io::storage::Range;
 use airindex::io::storage::ReadRequest;
@@ -132,10 +133,7 @@ fn benchmark(args: &Cli) -> GResult<Vec<Vec<u128>>> {
 
 fn benchmark_set(args: &Cli) -> GResult<Vec<u128>> {
   // create storage
-  let fsa = Box::new(FileSystemAdaptor::new());
-  let es = Rc::new(RefCell::new(ExternalStorage::new()
-    .with("file".to_string(), fsa)?
-  ));
+  let es = benchmark_create_storage()?;
 
   // writes
   let file_descs = benchmark_write(&es, args)?;
@@ -150,6 +148,23 @@ fn benchmark_set(args: &Cli) -> GResult<Vec<u128>> {
 
   // return benchmark numbers
   Ok(time_measures)
+}
+
+fn benchmark_create_storage() -> GResult<Rc<RefCell<ExternalStorage>>> {
+  let mut es = ExternalStorage::new();
+
+  // file system
+  let fsa = Box::new(FileSystemAdaptor::new());
+  es = es.with("file".to_string(), fsa)?;
+
+  // azure storage
+  let aza = AzureStorageAdaptor::new_block();
+  match aza {
+    Ok(aza) => es = es.with("az".to_string(), Box::new(aza))?,
+    Err(e) => log::error!("Failed to initialize azure storage, {:?}", e),
+  }
+  
+  Ok(Rc::new(RefCell::new(es)))
 }
 
 fn benchmark_write(es: &Rc<RefCell<ExternalStorage>>, args: &Cli) -> GResult<Vec<FileDescription>> {
