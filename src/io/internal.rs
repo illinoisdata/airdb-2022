@@ -1,4 +1,5 @@
-use moka::sync::Cache;
+use lru::LruCache;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use url::Url;
@@ -32,7 +33,7 @@ impl std::fmt::Debug for CacheKey {
 pub struct ExternalStorage {
   adaptors: HashMap<String, Rc<Box<dyn Adaptor>>>,
   schemes: Vec<String>,  // HACK: for error reporting
-  page_cache: Cache<CacheKey, SharedBytes>,
+  page_cache: RefCell<LruCache<CacheKey, SharedBytes>>,
   page_size: usize,
 }
 
@@ -41,7 +42,6 @@ impl std::fmt::Debug for ExternalStorage {
     f.debug_struct("ExternalStorage")
       .field("adaptors", &self.adaptors)
       .field("schemes", &self.schemes)
-      .field("page_cache_capacity", &self.page_cache.max_capacity())
       .field("page_size", &self.page_size)
       .finish()
   }
@@ -59,16 +59,11 @@ impl ExternalStorage {
     ExternalStorage::new_with_cache(1 << 33 /* 8 GB */, 1 << 13 /* 8192 B */)
   }
 
-  pub fn new_with_cache(cache_size: u64, page_size: usize) -> ExternalStorage {
+  pub fn new_with_cache(cache_size: usize, page_size: usize) -> ExternalStorage {
     ExternalStorage{
       adaptors: HashMap::new(),
       schemes: Vec::new(),
-      page_cache: Cache::builder()
-        .weigher(|_key, value: &SharedBytes| -> u32 {
-          value.len().try_into().unwrap()
-        })
-        .max_capacity(cache_size)
-        .build(),
+      page_cache: RefCell::new(LruCache::new(cache_size / page_size)),
       page_size,
     }
   }
@@ -117,10 +112,10 @@ impl ExternalStorage {
         let offset_l = page_range.offset - offset;  // underflow if offset not align
         let offset_r = std::cmp::min(buffer.len(), page_range.offset + page_range.length - offset);
         let page_bytes = buffer[offset_l .. offset_r].to_vec();
-        self.page_cache.insert(
+        self.page_cache.borrow_mut().put(
           cache_key,
           SharedBytes::from(page_bytes),
-        )
+        );
       });
   }
 
@@ -148,7 +143,7 @@ impl ExternalStorage {
 
   fn miss_cache(&self, url: &Url, page_idx: usize) -> bool {
     let cache_key = self.cache_key(url.clone(), page_idx);
-    self.page_cache.get(&cache_key).is_none()
+    self.page_cache.borrow_mut().get(&cache_key).is_none()
   }
 
   fn read_through_page(&self, url: &Url, page_idx: usize) -> GResult<(usize, SharedBytes)> {
@@ -156,15 +151,15 @@ impl ExternalStorage {
     let cache_key = self.cache_key(url.clone(), page_idx);
 
     // check in cache
-    if let Some(cache_line) = self.page_cache.get(&cache_key) {
+    if let Some(cache_line) = self.page_cache.borrow_mut().get(&cache_key) {
       // cache hit
-      Ok((page_idx, cache_line))
+      Ok((page_idx, cache_line.clone()))
     } else {
       // cache miss even after prepare (can happen if eviction occurs in between)
       log::warn!("Cache missing after prepare {:?}", cache_key);
       let cache_bytes = self.select_adaptor(url)?
         .read_range(url, &Range { offset: page_idx * self.page_size, length: self.page_size })?;
-      // self.page_cache.insert(cache_key, cache_bytes.clone());  // TODO: should we insert?
+      // self.page_cache.put(cache_key, cache_bytes.clone());  // TODO: should we insert?
       Ok((page_idx, cache_bytes))
     }
   }
@@ -189,14 +184,13 @@ impl ExternalStorage {
   }
 
   pub fn read_range(&self, url: &Url, range: &Range) -> GResult<SharedByteView> {
+    // warm up cache
     self.prepare_cache(url, range)?;
-    let pages = self.range_to_pages(range)
-      .map(|page_idx| self.read_through_page(url, page_idx))
-      .collect::<GResult<Vec<(usize, SharedBytes)>>>()?;
 
-    // concatenate page
+    // collect page bytes
     let mut view = SharedByteView::default();
-    for (page_idx, page_cache) in pages {
+    for page_idx in self.range_to_pages(range) {
+      let (page_idx, page_cache) = self.read_through_page(url, page_idx)?;
       let page_range = self.page_to_range(page_idx);
       let page_l = range.offset.saturating_sub(page_range.offset);
       let page_r = std::cmp::min(page_cache.len(), (range.offset + range.length).saturating_sub(page_range.offset));
@@ -207,19 +201,19 @@ impl ExternalStorage {
 
   pub fn create(&self, url: &Url) -> GResult<()> {
     // TODO: use invalidate_entries_if and support_invalidation_closures to invalid some url
-    self.page_cache.invalidate_all();
+    self.page_cache.borrow_mut().clear();
     self.select_adaptor(url)?.create(url)
   }
 
   pub fn write_all(&self, url: &Url, buf: &[u8]) -> GResult<()> {
     // TODO: use invalidate_entries_if and support_invalidation_closures to invalid some url
-    self.page_cache.invalidate_all();
+    self.page_cache.borrow_mut().clear();
     self.select_adaptor(url)?.write_all(url, buf)
   }
 
   pub fn remove(&self, url: &Url) -> GResult<()> {
     // TODO: use invalidate_entries_if and support_invalidation_closures to invalid some url
-    self.page_cache.invalidate_all();
+    self.page_cache.borrow_mut().clear();
     self.select_adaptor(url)?.remove(url)
   }
 }

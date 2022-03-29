@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 use std::ops::Index;
 use std::slice::Chunks;
-use std::sync::Arc;
+use std::rc::Rc;
 
 /*
  * Structures around byte array
@@ -10,9 +10,9 @@ use std::sync::Arc;
  *   SharedByteView: shared immutable possibly-non-contiguous byte slice
  */
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct SharedBytes {
-  buffer: Arc<Vec<u8>>,
+  buffer: Rc<Vec<u8>>,
 }
 
 impl SharedBytes {
@@ -30,10 +30,16 @@ impl SharedBytes {
 
   pub fn slice(&self, offset: usize, length: usize) -> SharedByteSlice {
     SharedByteSlice {
-      buffer: self.clone(),
+      buffer: Rc::clone(&self.buffer),
       offset,
       length,
     }
+  }
+}
+
+impl Clone for SharedBytes {
+  fn clone(&self) -> Self {
+    SharedBytes { buffer: Rc::clone(&self.buffer) }
   }
 }
 
@@ -45,15 +51,15 @@ impl<Idx: std::slice::SliceIndex<[u8]>> Index<Idx> for SharedBytes {
   }
 }
 
-impl From<Arc<Vec<u8>>> for SharedBytes {
-  fn from(buffer: Arc<Vec<u8>>) -> Self {
+impl From<Rc<Vec<u8>>> for SharedBytes {
+  fn from(buffer: Rc<Vec<u8>>) -> Self {
     SharedBytes { buffer }
   }
 }
 
 impl From<Vec<u8>> for SharedBytes {
   fn from(buffer: Vec<u8>) -> Self {
-    SharedBytes { buffer: Arc::new(buffer) }
+    SharedBytes { buffer: Rc::new(buffer) }
   }
 }
 
@@ -61,7 +67,7 @@ impl From<Vec<u8>> for SharedBytes {
 /* Slice of one shared bytes */
 
 pub struct SharedByteSlice {
-  buffer: SharedBytes,
+  buffer: Rc<Vec<u8>>,
   offset: usize,
   length: usize,
 }
@@ -155,6 +161,16 @@ impl SharedByteView {
       buffer_offset += slice.len();
     }
     buffer
+  }
+}
+
+impl From<Vec<SharedByteSlice>> for SharedByteView {
+  fn from(slices: Vec<SharedByteSlice>) -> Self {
+    let mut view = SharedByteView::default();
+    for slice in slices {
+      view.push(slice)
+    }
+    view
   }
 }
 
