@@ -12,7 +12,6 @@ use crate::index::IndexMetaserde;
 use crate::index::KeyPositionRange;
 use crate::index::KeyT;
 use crate::io::internal::ExternalStorage;
-use crate::io::storage::Adaptor;
 use crate::meta::Context;
 use crate::store::key_position::KeyPositionCollection;
 use crate::store::key_position::PositionT;

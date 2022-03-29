@@ -74,7 +74,7 @@ impl SOSDRankDB {
     let mut last_key = None;
     let mut duplicate_count = 0;
     for (dbuffer, _rank) in reader.iter_with_rank() {
-      let current_key = self.deserialize_key(dbuffer);
+      let current_key = self.deserialize_key(&dbuffer);
       if last_key.is_some() && last_key.unwrap() == current_key {
         duplicate_count += 1;
       } else {

@@ -12,7 +12,6 @@ use structopt::StructOpt;
 
 use airindex::common::error::GResult;
 use airindex::io::internal::ExternalStorage;
-use airindex::io::storage::Adaptor;
 use airindex::io::storage::AzureStorageAdaptor;
 use airindex::io::storage::FileSystemAdaptor;
 use airindex::io::storage::Range;
@@ -270,7 +269,13 @@ fn generate_one_readset(exp_config: &ExperimentConfig) -> Vec<ReadRequest>  {
 fn read_measure(es: &Rc<RefCell<ExternalStorage>>, read_request: &[ReadRequest], exp_config: &ExperimentConfig) -> GResult<u128> {
   let start_time = Instant::now();
   match exp_config.read_method {
-    ReadMethod::BatchSequential => es.borrow().read_batch_sequential(read_request)?,
+    ReadMethod::BatchSequential => {
+      read_request.iter().map(|request|
+        match request {
+          ReadRequest::All { url } => es.borrow().read_all(url).is_ok(),
+          ReadRequest::Range { url, range } => es.borrow().read_range(url, range).is_ok(),
+        }).collect::<Vec<bool>>()
+    },
   };
   Ok(start_time.elapsed().as_nanos())
 }

@@ -4,13 +4,12 @@ use std::fmt;
 use std::rc::Rc;
 use url::Url;
 
-use crate::common::SharedBytes;
+use crate::common::SharedByteView;
 use crate::common::error::GenericError;
 use crate::common::error::GResult;
 use crate::common::error::IncompleteDataStoreFromMeta;
 use crate::common::error::OutofCoverageError;
 use crate::io::internal::ExternalStorage;
-use crate::io::storage::Adaptor;
 use crate::io::storage::Range;
 use crate::meta::Context;
 use crate::store::DataStore;
@@ -99,7 +98,7 @@ impl ArrayStore {
       self.storage.borrow().write_all(&self.array_url, array_buffer)
   }
 
-  fn read_page_range(&self, offset: PositionT, length: PositionT) -> GResult<(SharedBytes, usize)> {
+  fn read_page_range(&self, offset: PositionT, length: PositionT) -> GResult<(SharedByteView, usize)> {
     // calculate first and last "page" indexes
     let end_offset = offset + length;
     let start_rank = offset / self.state.data_size + (offset % self.state.data_size != 0) as usize;
@@ -227,7 +226,7 @@ impl<'a> DataStoreWriter for ArrayStoreWriter<'a> {
 /* Reader */
 
 pub struct ArrayStoreReader {
-  array_buffer: SharedBytes,
+  array_buffer: SharedByteView,
   start_rank: usize,
   data_size: usize,
 }
@@ -244,7 +243,7 @@ pub struct ArrayStoreReaderIterWithRank<'a> {
 }
 
 impl ArrayStoreReader {
-  fn new(array_buffer: SharedBytes, start_rank: usize, data_size: usize) -> ArrayStoreReader {
+  fn new(array_buffer: SharedByteView, start_rank: usize, data_size: usize) -> ArrayStoreReader {
     ArrayStoreReader {
       array_buffer,
       start_rank,
@@ -258,12 +257,12 @@ impl ArrayStoreReader {
 
   pub fn key_at(&self, idx: usize) -> KeyT {
     let offset = idx * self.data_size;
-    KeyBuffer::deserialize_key(&self.array_buffer[offset .. offset + self.data_size])
+    KeyBuffer::deserialize_key(&self.array_buffer.clone_within(offset .. offset + self.data_size))
   }
 
   pub fn kb_at(&self, idx: usize) -> KeyBuffer {
     let offset = idx * self.data_size;
-    KeyBuffer::deserialize(&self.array_buffer[offset .. offset + self.data_size])
+    KeyBuffer::deserialize(&self.array_buffer.clone_within(offset .. offset + self.data_size))
   }
 
   pub fn first_of_with_rank(&self, key: KeyT) -> GResult<(KeyBuffer, usize)> {
@@ -300,9 +299,9 @@ impl DataStoreReader for ArrayStoreReader {
 }
 
 impl<'a> ArrayStoreReaderIter<'a> {
-  fn next_block(&mut self) -> Option<&[u8]> {
+  fn next_block(&mut self) -> Option<Vec<u8>> {
     if self.current_offset < self.r.array_buffer.len() {
-      let dbuffer = &self.r.array_buffer[self.current_offset .. self.current_offset + self.r.data_size];
+      let dbuffer = self.r.array_buffer.clone_within(self.current_offset .. self.current_offset + self.r.data_size);
       self.current_offset += self.r.data_size;
       Some(dbuffer)
     } else {
@@ -317,16 +316,16 @@ impl<'a> Iterator for ArrayStoreReaderIter<'a> {
   type Item = KeyBuffer;
   
   fn next(&mut self) -> Option<Self::Item> {
-    self.next_block().map(KeyBuffer::deserialize)
+    self.next_block().map(|dbuffer| KeyBuffer::deserialize(&dbuffer))
   }
 }
 
 impl<'a> Iterator for ArrayStoreReaderIterWithRank<'a> {
-  type Item = (&'a [u8], usize);
+  type Item = (Vec<u8>, usize);
   
   fn next(&mut self) -> Option<Self::Item> {
     if self.current_offset < self.r.array_buffer.len() {
-      let dbuffer = &self.r.array_buffer[self.current_offset .. self.current_offset + self.r.data_size];
+      let dbuffer = self.r.array_buffer.clone_within(self.current_offset .. self.current_offset + self.r.data_size);
       let drank = self.rank;
       self.current_offset += self.r.data_size;
       self.rank += 1;

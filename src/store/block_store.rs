@@ -4,14 +4,13 @@ use std::fmt;
 use std::rc::Rc;
 use url::Url;
 
+use crate::common::SharedByteView;
 use crate::common::error::GenericError;
 use crate::common::error::GResult;
 use crate::common::error::IncompleteDataStoreFromMeta;
 use crate::common::error::OutofCoverageError;
 use crate::io::internal::ExternalStorage;
-use crate::io::storage::Adaptor;
 use crate::io::storage::Range;
-use crate::io::storage::ReadRequest;
 use crate::meta::Context;
 use crate::store::DataStore;
 use crate::store::DataStoreMeta;
@@ -150,13 +149,13 @@ impl BlockStore {
     let end_page_idx = std::cmp::min(end_offset / self.state.cfg.page_size, self.state.total_pages);
 
     // make read requests
-    let requests = self.read_page_range_requests(start_page_idx, end_page_idx)?;
-    let section_buffers = self.storage.borrow().read_batch_sequential(&requests)?;
+    let section_buffers = self.read_page_range_section(start_page_idx, end_page_idx)?;
     let mut flags = Vec::new();
     let mut chunks_buffer = Vec::new();
     for section_buffer in section_buffers {
       assert_eq!(section_buffer.len() % self.state.cfg.page_size, 0);
-      for page in section_buffer.chunks(self.state.cfg.page_size) {
+      // TODO: remove clone_all
+      for page in section_buffer.clone_all().chunks(self.state.cfg.page_size) {
         let (flag, chunk) = read_page(page);
         flags.push(flag);
         chunks_buffer.extend(chunk);
@@ -165,10 +164,10 @@ impl BlockStore {
     Ok((flags, chunks_buffer))
   }
 
-  fn read_page_range_requests(&self, mut start_page_idx: usize, end_page_idx: usize) -> GResult<Vec<ReadRequest>> {
+  fn read_page_range_section(&self, mut start_page_idx: usize, end_page_idx: usize) -> GResult<Vec<SharedByteView>> {
     let pages_per_block = self.state.cfg.block_size / self.state.cfg.page_size;
     let mut start_block_idx = start_page_idx / pages_per_block;
-    let mut read_requests = Vec::new();
+    let mut section_buffers = Vec::new();
     while start_page_idx < end_page_idx {
       // calculate current section boundaries
       let start_section_offset = (start_page_idx % pages_per_block) * self.state.cfg.page_size;
@@ -182,16 +181,17 @@ impl BlockStore {
       let section_length = (end_section_page_idx - start_page_idx) * self.state.cfg.page_size;
 
       // add read request for this section
-      read_requests.push(ReadRequest::Range {
-        url: self.block_url(start_block_idx)?,
-        range: Range{ offset: start_section_offset, length: section_length },
-      });
+      let section_buffer = self.storage.borrow().read_range(
+        &self.block_url(start_block_idx)?,
+        &Range{ offset: start_section_offset, length: section_length },
+      )?;
+      section_buffers.push(section_buffer);
 
       // step forward
       start_page_idx = end_section_page_idx;
       start_block_idx += 1;
     }
-    Ok(read_requests)
+    Ok(section_buffers)
   }
 }
 
