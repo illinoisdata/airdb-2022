@@ -35,6 +35,14 @@ impl SharedBytes {
       length,
     }
   }
+
+  pub fn slice_all(&self) -> SharedByteSlice {
+    SharedByteSlice {
+      buffer: Rc::clone(&self.buffer),
+      offset: 0,
+      length: self.len(),
+    }
+  }
 }
 
 impl Clone for SharedBytes {
@@ -171,6 +179,12 @@ impl From<Vec<SharedByteSlice>> for SharedByteView {
       view.push(slice)
     }
     view
+  }
+}
+
+impl From<SharedBytes> for SharedByteView {
+  fn from(buffer: SharedBytes) -> Self {
+    SharedByteView::from(vec![buffer.slice_all()])
   }
 }
 

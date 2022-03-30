@@ -24,11 +24,12 @@ use airindex::io::profile::StorageProfile;
 use airindex::io::storage::Adaptor;
 use airindex::io::storage::AzureStorageAdaptor;
 use airindex::io::storage::FileSystemAdaptor;
+use airindex::io::storage::MmapAdaptor;
 use airindex::meta::Context;
 use airindex::meta;
-use airindex::model::ModelDrafter;
 use airindex::model::band::BandMultipleDrafter;
 use airindex::model::linear::DoubleLinearMultipleDrafter;
+use airindex::model::ModelDrafter;
 use airindex::model::step::StepMultipleDrafter;
 use airindex::store::array_store::ArrayStore;
 use airindex::store::key_position::KeyPositionCollection;
@@ -88,9 +89,9 @@ pub struct Cli {
 
   /* For testing/debugging */
 
-  // /// disable cache to storage IO interface
-  // #[structopt(long)]
-  // no_cache: bool,
+  /// disable cache to storage IO interface
+  #[structopt(long)]
+  no_cache: bool,
   /// disable parallel index building
   #[structopt(long)]
   no_parallel: bool,
@@ -159,25 +160,22 @@ impl Experiment {
     })
   }
 
-  fn load_io(_args: &Cli) -> GResult<ExternalStorage> {
-    let mut es = ExternalStorage::new();
+  fn load_io(args: &Cli) -> GResult<ExternalStorage> {
+    let mut es = if args.no_cache {
+      ExternalStorage::new_with_cache(0, 4096)  // cache of size 0 byte
+    } else {
+      ExternalStorage::new()
+    };
 
     // file system
-    // let fsa = if args.no_cache {
-    //   Box::new(FileSystemAdaptor::new()) as Box<dyn Adaptor>
-    // } else {
-    //   Box::new(MmapAdaptor::new()) as Box<dyn Adaptor>
-    // };
     let fsa = Box::new(FileSystemAdaptor::new()) as Box<dyn Adaptor>;
     es = es.with("file".to_string(), fsa)?;
 
+    // file system, via mmap
+    let mfsa = Box::new(MmapAdaptor::new()) as Box<dyn Adaptor>;
+    es = es.with("mmap".to_string(), mfsa)?;
+
     // azure storage
-    // let aza = if args.no_cache {
-    //   AzureStorageAdaptor::new_block()
-    // } else {
-    //   log::warn!("Cache not implemented for Azure IO");
-    //   AzureStorageAdaptor::new_block()
-    // };
     let aza = AzureStorageAdaptor::new_block();
     match aza {
       Ok(aza) => es = es.with("az".to_string(), Box::new(aza))?,

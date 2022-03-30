@@ -35,6 +35,7 @@ pub struct ExternalStorage {
   schemes: Vec<String>,  // HACK: for error reporting
   page_cache: RefCell<LruCache<CacheKey, SharedBytes>>,
   page_size: usize,
+  total_page: usize,
 }
 
 impl std::fmt::Debug for ExternalStorage {
@@ -43,6 +44,7 @@ impl std::fmt::Debug for ExternalStorage {
       .field("adaptors", &self.adaptors)
       .field("schemes", &self.schemes)
       .field("page_size", &self.page_size)
+      .field("total_page", &self.total_page)
       .finish()
   }
 }
@@ -56,15 +58,17 @@ impl Default for ExternalStorage {
 impl ExternalStorage {
   pub fn new() -> ExternalStorage {
     // ExternalStorage::new_with_cache(1 << 33 /* 8 GB */, 1 << 12 /* 4096 */)
-    ExternalStorage::new_with_cache(1 << 33 /* 8 GB */, 1 << 13 /* 8192 B */)
+    ExternalStorage::new_with_cache(1 << 33 /* 8 GB */, 1 << 13 /* 8192 */)
   }
 
   pub fn new_with_cache(cache_size: usize, page_size: usize) -> ExternalStorage {
+    let total_page = cache_size / page_size;
     ExternalStorage{
       adaptors: HashMap::new(),
       schemes: Vec::new(),
-      page_cache: RefCell::new(LruCache::new(cache_size / page_size)),
+      page_cache: RefCell::new(LruCache::new(total_page)),
       page_size,
+      total_page,
     }
   }
 
@@ -184,19 +188,24 @@ impl ExternalStorage {
   }
 
   pub fn read_range(&self, url: &Url, range: &Range) -> GResult<SharedByteView> {
-    // warm up cache
-    self.prepare_cache(url, range)?;
+    if range.length <= self.total_page {
+      // warm up cache
+      self.prepare_cache(url, range)?;
 
-    // collect page bytes
-    let mut view = SharedByteView::default();
-    for page_idx in self.range_to_pages(range) {
-      let (page_idx, page_cache) = self.read_through_page(url, page_idx)?;
-      let page_range = self.page_to_range(page_idx);
-      let page_l = range.offset.saturating_sub(page_range.offset);
-      let page_r = std::cmp::min(page_cache.len(), (range.offset + range.length).saturating_sub(page_range.offset));
-      view.push(page_cache.slice(page_l, page_r - page_l))
+      // collect page bytes
+      let mut view = SharedByteView::default();
+      for page_idx in self.range_to_pages(range) {
+        let (page_idx, page_cache) = self.read_through_page(url, page_idx)?;
+        let page_range = self.page_to_range(page_idx);
+        let page_l = range.offset.saturating_sub(page_range.offset);
+        let page_r = std::cmp::min(page_cache.len(), (range.offset + range.length).saturating_sub(page_range.offset));
+        view.push(page_cache.slice(page_l, page_r - page_l))
+      }
+      Ok(view)
+    } else {
+      // range too large for the cache
+      self.select_adaptor(url)?.read_range(url, &range).map(|sb| SharedByteView::from(sb))
     }
-    Ok(view)
   }
 
   pub fn create(&self, url: &Url) -> GResult<()> {

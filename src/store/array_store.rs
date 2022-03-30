@@ -226,7 +226,7 @@ impl<'a> DataStoreWriter for ArrayStoreWriter<'a> {
 /* Reader */
 
 pub struct ArrayStoreReader {
-  array_buffer: SharedByteView,
+  array_view: SharedByteView,
   start_rank: usize,
   data_size: usize,
 }
@@ -243,9 +243,9 @@ pub struct ArrayStoreReaderIterWithRank<'a> {
 }
 
 impl ArrayStoreReader {
-  fn new(array_buffer: SharedByteView, start_rank: usize, data_size: usize) -> ArrayStoreReader {
+  fn new(array_view: SharedByteView, start_rank: usize, data_size: usize) -> ArrayStoreReader {
     ArrayStoreReader {
-      array_buffer,
+      array_view,
       start_rank,
       data_size,
     }
@@ -257,19 +257,19 @@ impl ArrayStoreReader {
 
   pub fn key_at(&self, idx: usize) -> KeyT {
     let offset = idx * self.data_size;
-    KeyBuffer::deserialize_key(&self.array_buffer.clone_within(offset .. offset + self.data_size))
+    KeyBuffer::deserialize_key(&self.array_view.clone_within(offset .. offset + self.data_size))
   }
 
   pub fn kb_at(&self, idx: usize) -> KeyBuffer {
     let offset = idx * self.data_size;
-    KeyBuffer::deserialize(&self.array_buffer.clone_within(offset .. offset + self.data_size))
+    KeyBuffer::deserialize(&self.array_view.clone_within(offset .. offset + self.data_size))
   }
 
   pub fn first_of_with_rank(&self, key: KeyT) -> GResult<(KeyBuffer, usize)> {
     // binary search
-    assert!(self.array_buffer.len() % self.data_size == 0);
+    assert!(self.array_view.len() % self.data_size == 0);
     let mut l = 0;
-    let mut r = self.array_buffer.len() / self.data_size ;
+    let mut r = self.array_view.len() / self.data_size ;
     while l + 1 < r {
       let mid = l + (r - l) / 2;
       let mid_key = self.key_at(mid);
@@ -279,8 +279,10 @@ impl ArrayStoreReader {
           std::cmp::Ordering::Greater => { r = mid },
       }
     }
-    let idx = if r < self.array_buffer.len() / self.data_size && self.key_at(r) == key { r } else { l };
-    if idx < self.array_buffer.len() / self.data_size {
+    let idx = if r < self.array_view.len() / self.data_size && self.key_at(r) == key { r } else { l };
+
+    // deserialize and report back
+    if idx < self.array_view.len() / self.data_size {
       let kb = self.kb_at(idx);
       return Ok((kb, idx + self.start_rank));
     }
@@ -300,8 +302,8 @@ impl DataStoreReader for ArrayStoreReader {
 
 impl<'a> ArrayStoreReaderIter<'a> {
   fn next_block(&mut self) -> Option<Vec<u8>> {
-    if self.current_offset < self.r.array_buffer.len() {
-      let dbuffer = self.r.array_buffer.clone_within(self.current_offset .. self.current_offset + self.r.data_size);
+    if self.current_offset < self.r.array_view.len() {
+      let dbuffer = self.r.array_view.clone_within(self.current_offset .. self.current_offset + self.r.data_size);
       self.current_offset += self.r.data_size;
       Some(dbuffer)
     } else {
@@ -324,8 +326,8 @@ impl<'a> Iterator for ArrayStoreReaderIterWithRank<'a> {
   type Item = (Vec<u8>, usize);
   
   fn next(&mut self) -> Option<Self::Item> {
-    if self.current_offset < self.r.array_buffer.len() {
-      let dbuffer = self.r.array_buffer.clone_within(self.current_offset .. self.current_offset + self.r.data_size);
+    if self.current_offset < self.r.array_view.len() {
+      let dbuffer = self.r.array_view.clone_within(self.current_offset .. self.current_offset + self.r.data_size);
       let drank = self.rank;
       self.current_offset += self.r.data_size;
       self.rank += 1;

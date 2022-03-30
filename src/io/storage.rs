@@ -76,7 +76,7 @@ pub trait Adaptor: std::fmt::Debug {
 /* File system */
 
 fn open_rfile(url: &Url) -> GResult<File> {
-  assert_eq!(url.scheme(), "file");
+  assert!(url.scheme() == "file" || url.scheme() == "mmap");
   Ok(OpenOptions::new()
       .read(true)
       .open(url.path())?)
@@ -154,13 +154,13 @@ impl Adaptor for FileSystemAdaptor {
   }
 
   fn create(&self, url: &Url) -> GResult<()> {
-    assert_eq!(url.scheme(), "file");
+    assert!(url.scheme() == "file" || url.scheme() == "mmap");
     std::fs::File::create(url.path())?;
     Ok(())
   }
 
   fn write_all(&self, url: &Url, buf: &[u8]) -> GResult<()> {
-    assert_eq!(url.scheme(), "file");
+    assert!(url.scheme() == "file" || url.scheme() == "mmap");
     let url_path = url.path();
     self.create_directory(PathBuf::from(url_path).parent().unwrap())?;
     let mut f = OpenOptions::new()
@@ -172,7 +172,7 @@ impl Adaptor for FileSystemAdaptor {
   }
 
   fn remove(&self, url: &Url) -> GResult<()> {
-    assert_eq!(url.scheme(), "file");
+    assert!(url.scheme() == "file" || url.scheme() == "mmap");
     std::fs::remove_file(Path::new(url.path()))?;
     Ok(())
   }
@@ -203,7 +203,7 @@ pub struct MmapAdaptor {
 }
 
 fn new_mmap(url: &Url) -> GResult<Mmap> {
-  assert_eq!(url.scheme(), "file");
+  assert_eq!(url.scheme(), "mmap");
   let file = File::open(url.path())?;
   let mmap = unsafe {
     MmapOptions::new()
@@ -640,55 +640,67 @@ mod tests {
 
   /* MmapAdaptor-specific tests */
 
+  fn dir_to_mmap_url(resource_dir: &str) -> GResult<Url> {
+    let file_url = url_from_dir_str(resource_dir)?;
+    let url = Url::parse(&format!("mmap://{:?}", file_url.path()))?;
+    log::error!("url: {:?}", url);
+    Ok(url)
+  }
+
   fn mfsa_resources_setup() -> GResult<(Url, MmapAdaptor)> {
-    let resource_dir = url_from_dir_str(env!("CARGO_MANIFEST_DIR"))?.join("resources/test/")?;
+    let resource_dir = dir_to_mmap_url(env!("CARGO_MANIFEST_DIR"))?.join("resources/test/")?;
     Ok((resource_dir, MmapAdaptor::new()))
   }
 
-  fn mfsa_tempdir_setup() -> GResult<(TempDir, MmapAdaptor)> {
-    Ok((TempDir::new()?, MmapAdaptor::new()))
+  fn mfsa_tempdir_setup() -> GResult<(TempDir, Url, MmapAdaptor)> {
+    let temp_dir = TempDir::new()?;
+    let temp_url = dir_to_mmap_url(temp_dir.path()
+      .to_str()
+      .expect("Failed to write tempdir as string")
+    )?;
+    Ok((temp_dir, temp_url, MmapAdaptor::new()))
   }
 
   #[test]
   fn mfsa_write_all_zero_ok() -> GResult<()> {
-    let (temp_dir, mfsa) = mfsa_tempdir_setup()?;
-    write_all_zero_ok(mfsa, &url_from_dir_path(temp_dir.path())?)
+    let (_temp_dir, temp_url, mfsa) = mfsa_tempdir_setup()?;
+    write_all_zero_ok(mfsa, &temp_url)
   }
 
   #[test]
   fn mfsa_write_all_inside_dir_ok() -> GResult<()> {
-    let (temp_dir, mfsa) = mfsa_tempdir_setup()?;
-    write_all_inside_dir_ok(mfsa, &url_from_dir_path(temp_dir.path())?)
+    let (_temp_dir, temp_url, mfsa) = mfsa_tempdir_setup()?;
+    write_all_inside_dir_ok(mfsa, &temp_url)
   }
 
   #[test]
   fn mfsa_write_read_all_zero_ok() -> GResult<()> {
-    let (temp_dir, mfsa) = mfsa_tempdir_setup()?;
-    write_read_all_zero_ok(mfsa, &url_from_dir_path(temp_dir.path())?)
+    let (_temp_dir, temp_url, mfsa) = mfsa_tempdir_setup()?;
+    write_read_all_zero_ok(mfsa, &temp_url)
   }
 
   #[test]
   fn mfsa_write_read_all_random_ok() -> GResult<()> {
-    let (temp_dir, mfsa) = mfsa_tempdir_setup()?;
-    write_read_all_random_ok(mfsa, &url_from_dir_path(temp_dir.path())?)
+    let (_temp_dir, temp_url, mfsa) = mfsa_tempdir_setup()?;
+    write_read_all_random_ok(mfsa, &temp_url)
   }
 
   #[test]
   fn mfsa_write_twice_read_all_random_ok() -> GResult<()> {
-    let (temp_dir, mfsa) = mfsa_tempdir_setup()?;
-    write_twice_read_all_random_ok(mfsa, &url_from_dir_path(temp_dir.path())?)
+    let (_temp_dir, temp_url, mfsa) = mfsa_tempdir_setup()?;
+    write_twice_read_all_random_ok(mfsa, &temp_url)
   }
 
   #[test]
   fn mfsa_write_read_range_random_ok() -> GResult<()> {
-    let (temp_dir, mfsa) = mfsa_tempdir_setup()?;
-    write_read_range_random_ok(mfsa, &url_from_dir_path(temp_dir.path())?)
+    let (_temp_dir, temp_url, mfsa) = mfsa_tempdir_setup()?;
+    write_read_range_random_ok(mfsa, &temp_url)
   }
 
   #[test]
   fn mfsa_write_read_generic_random_ok() -> GResult<()> {
-    let (temp_dir, mfsa) = mfsa_tempdir_setup()?;
-    write_read_generic_random_ok(mfsa, &url_from_dir_path(temp_dir.path())?)
+    let (_temp_dir, temp_url, mfsa) = mfsa_tempdir_setup()?;
+    write_read_generic_random_ok(mfsa, &temp_url)
   }
 
   #[test]
