@@ -13,6 +13,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::io::Read;
 use std::io::Write;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
@@ -84,7 +85,7 @@ fn open_rfile(url: &Url) -> GResult<File> {
 
 #[derive(Debug)]
 pub struct FileSystemAdaptor {
-  rfile_dict: Rc<RefCell<HashMap<Url, Rc<File>>>>,
+  rfile_dict: Rc<RefCell<HashMap<Url, Rc<RefCell<File>>>>>,
 }
 
 impl Default for FileSystemAdaptor {
@@ -98,7 +99,7 @@ impl FileSystemAdaptor {
     FileSystemAdaptor { rfile_dict: Rc::new(RefCell::new(HashMap::new())) }
   }
 
-  fn read_range_from_file(f: Rc<File>, range: &Range, buf: &mut [u8]) -> GResult<()> {
+  fn read_range_from_file(f: &File, range: &Range, buf: &mut [u8]) -> GResult<()> {
     // File::read_at might return fewer bytes than requested (e.g. 2GB at a time)
     // To read whole range, we request until the buffer is filled
     assert_eq!(buf.len(), range.length);
@@ -119,37 +120,34 @@ impl FileSystemAdaptor {
     Ok(std::fs::create_dir_all(path)?)
   }
 
-  fn open(&self, url: &Url) -> GResult<Rc<File>> {
+  fn open(&self, url: &Url) -> GResult<Rc<RefCell<File>>> {
     // this is or_insert_with_key with fallible insertion
     Ok(match self.rfile_dict.borrow_mut().entry(url.clone()) {
       Entry::Occupied(entry) => entry.get().clone(),
-      Entry::Vacant(entry) => entry.insert(Rc::new(open_rfile(url)?)).clone(),
+      Entry::Vacant(entry) => entry.insert(Rc::new(RefCell::new(open_rfile(url)?))).clone(),
     })
   }
 }
 
 impl Adaptor for FileSystemAdaptor {
   fn read_all(&self, url: &Url) -> GResult<SharedBytes> {
-    self.open(url).map(|f| {
-      let file_length = f.metadata()?.len();
-      let range = Range { offset: 0, length: file_length as usize };
-      let mut buffer = vec![0u8; range.length];
-      FileSystemAdaptor::read_range_from_file(f, &range, &mut buffer)
-        .map(|_| SharedBytes::from(buffer))
-    })?
+    let f = self.open(url)?;
+    let mut buffer = Vec::new();
+    f.borrow_mut().read_to_end(&mut buffer)?;
+    Ok(SharedBytes::from(buffer))
   }
 
   fn read_range(&self, url: &Url, range: &Range) -> GResult<SharedBytes> {
     self.open(url).map(|f| {
       let mut buffer = vec![0u8; range.length];
-      FileSystemAdaptor::read_range_from_file(f, range, &mut buffer)
+      FileSystemAdaptor::read_range_from_file(&f.borrow(), range, &mut buffer)
         .map(|_| SharedBytes::from(buffer))
     })?
   }
 
   fn read_in_place(&self, url: &Url, range: &Range, buffer: &mut [u8]) -> GResult<()> {
     self.open(url).map(|f| {
-      FileSystemAdaptor::read_range_from_file(f, range, buffer)
+      FileSystemAdaptor::read_range_from_file(&f.borrow(), range, buffer)
     })?
   }
 

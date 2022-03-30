@@ -24,7 +24,10 @@ RESET_SCRIPT=$7
 PROFILE="--affine-latency-ns 10000000 --affine-bandwidth-mbps 16.0"  # nfs
 # PROFILE="--affine-latency-ns 108000000 --affine-bandwidth-mbps 104.0"  # nfs2
 # PROFILE="--affine-latency-ns 22000 --affine-bandwidth-mbps 2500.0"  # ssd
-echo "Using BLOB_ROOT=${BLOB_ROOT}, KEYSET_ROOT=${KEYSET_ROOT}, DB_ROOT=${DB_ROOT}, INDEX_TYPE=${INDEX_TYPE}, ACTION=${ACTION}, REPEAT=${REPEAT} RESET_SCRIPT=${RESET_SCRIPT}"
+LOG_LEVEL="info"
+# LOG_LEVEL="debug"
+# LOG_LEVEL="trace"
+echo "Using BLOB_ROOT=${BLOB_ROOT}, KEYSET_ROOT=${KEYSET_ROOT}, DB_ROOT=${DB_ROOT}, INDEX_TYPE=${INDEX_TYPE}, ACTION=${ACTION}, REPEAT=${REPEAT} RESET_SCRIPT=${RESET_SCRIPT}, PROFILE=${PROFILE}, LOG_LEVEL=${LOG_LEVEL}"
 if [[ $ACTION != "build" && $ACTION != "benchmark" ]]
 then
   echo "Invalid ACTION [build | benchmark]"
@@ -62,7 +65,7 @@ build () {
   keyset_path="${KEYSET_ROOT}/${sosd_blob[0]}_${sosd_blob[1]}M_${sosd_blob[2]}_ks"
 
   set -x
-  RUST_LOG=info RUST_BACKTRACE=full target/release/sosd_experiment --db-url "${DB_ROOT}/${blob_name}_${INDEX_TYPE}" --index-type ${INDEX_TYPE} --out-path sosd_build_out.jsons --dataset-name blob --sosd-blob-url "${BLOB_ROOT}/${blob_name}" --keyset-url "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} ${PROFILE} --do-build
+  RUST_LOG=airindex=${LOG_LEVEL},sosd_experiment=${LOG_LEVEL} RUST_BACKTRACE=full target/release/sosd_experiment --db-url "${DB_ROOT}/${blob_name}_${INDEX_TYPE}" --index-type ${INDEX_TYPE} --out-path sosd_build_out.jsons --dataset-name blob --sosd-blob-url "${BLOB_ROOT}/${blob_name}" --keyset-url "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} ${PROFILE} --do-build
   set +x
 }
 
@@ -76,7 +79,7 @@ benchmark () {
   for ((j = 0; j < ${REPEAT}; j++)) do
   bash ${RESET_SCRIPT}
   set -x
-  RUST_LOG=info RUST_BACKTRACE=full target/release/sosd_experiment --db-url "${DB_ROOT}/${blob_name}_${INDEX_TYPE}" --index-type ${INDEX_TYPE} --out-path sosd_benchmark_out.jsons --dataset-name blob --sosd-blob-url "${BLOB_ROOT}/${blob_name}" --keyset-url "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} ${PROFILE} --do-benchmark
+  RUST_LOG=airindex=${LOG_LEVEL},sosd_experiment=${LOG_LEVEL} RUST_BACKTRACE=full target/release/sosd_experiment --db-url "${DB_ROOT}/${blob_name}_${INDEX_TYPE}" --index-type ${INDEX_TYPE} --out-path sosd_benchmark_out.jsons --dataset-name blob --sosd-blob-url "${BLOB_ROOT}/${blob_name}" --keyset-url "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} ${PROFILE} --do-benchmark
   set +x
   done
 }
