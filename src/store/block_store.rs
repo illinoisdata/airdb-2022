@@ -417,7 +417,7 @@ impl<'a> Iterator for BlockStoreReaderIter<'a> {
   type Item = KeyBuffer;
 
   fn next(&mut self) -> Option<Self::Item> {
-    self.next_block().map(KeyBuffer::deserialize)
+    self.next_block().map(|block| KeyBuffer::deserialize(block.to_vec()))
   }
 }
 
@@ -483,7 +483,7 @@ mod tests {
     let _kps = {
       let mut bwriter = bstore.begin_write()?;
       for (key, value) in test_keys.iter().zip(test_buffers.iter()) {
-        bwriter.write(&KeyBuffer{ key: *key, buffer: value.to_vec()})?;
+        bwriter.write(&KeyBuffer::new(*key, value.to_vec()))?;
       }
     };
     assert_eq!(bstore.state.total_pages, 0, "Total pages should be zero without commit");
@@ -492,7 +492,7 @@ mod tests {
     let kps = {
       let mut bwriter = bstore.begin_write()?;
       for (key, value) in test_keys.iter().zip(test_buffers.iter()) {
-        bwriter.write(&KeyBuffer{ key: *key, buffer: value.to_vec()})?;
+        bwriter.write(&KeyBuffer::new(*key, value.to_vec()))?;
       }
       bwriter.commit()?
     };
@@ -519,7 +519,7 @@ mod tests {
       let kb = reader_iter.next().expect("Expect more data buffer");
       assert_eq!(kb.key, cur_key, "Read key does not match with the given map");
       assert_eq!(kb.key, test_keys[idx], "Read key does not match");
-      assert_eq!(kb.buffer, test_buffers[idx].to_vec(), "Read buffer does not match");
+      assert_eq!(&kb.buffer[..], test_buffers[idx].to_vec(), "Read buffer does not match");
 
       // check completeness
       assert!(reader_iter.next().is_none(), "Expected no more data buffer")
@@ -541,7 +541,7 @@ mod tests {
       for idx in 2..7 {  
         let kb = reader_iter.next().expect("Expect more data buffer");
         assert_eq!(kb.key, test_keys[idx], "Read key does not match (partial)");
-        assert_eq!(kb.buffer, test_buffers[idx].to_vec(), "Read buffer does not match (partial)");
+        assert_eq!(&kb.buffer[..], test_buffers[idx].to_vec(), "Read buffer does not match (partial)");
       }
       assert!(reader_iter.next().is_none(), "Expected no more data buffer (partial)")
     }
@@ -554,7 +554,7 @@ mod tests {
         // get next and check correctness
         let kb = reader_iter.next().expect("Expect more data buffer");
         assert_eq!(kb.key, *cur_key, "Read key does not match");
-        assert_eq!(kb.buffer, cur_value.to_vec(), "Read buffer does not match");
+        assert_eq!(&kb.buffer[..], cur_value.to_vec(), "Read buffer does not match");
       } 
       assert!(reader_iter.next().is_none(), "Expected no more data buffer (read all)")
     }

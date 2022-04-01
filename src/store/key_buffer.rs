@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::common::SharedBytes;
+use crate::common::SharedByteSlice;
 use crate::store::key_position::KEY_LENGTH;
 use crate::store::key_position::KeyT;
 
@@ -9,7 +11,7 @@ use crate::store::key_position::KeyT;
 // const KEY_LENGTH: usize = std::mem::size_of::<KeyT>();
 pub struct KeyBuffer {
   pub key: KeyT,  // TODO: generic Num + PartialOrd type
-  pub buffer: Vec<u8>,  // TODO: copy-on-write?
+  pub buffer: SharedByteSlice,  // TODO: copy-on-write?
 }
 
 impl fmt::Debug for KeyBuffer {
@@ -22,23 +24,31 @@ impl fmt::Debug for KeyBuffer {
 }
 
 impl KeyBuffer {  // maybe implement in Serializer, Deserializer instead?
-  pub fn serialize(&self) -> Vec<u8> {
-    // TODO: return reference by concat slices
-    let mut serialized_buffer = vec![0u8; KEY_LENGTH + self.buffer.len()];
-    serialized_buffer[..KEY_LENGTH].clone_from_slice(&self.key.to_le_bytes());
-    serialized_buffer[KEY_LENGTH..].clone_from_slice(&self.buffer);
-    serialized_buffer
-  }
-
-  pub fn deserialize(serialized_buffer: &[u8]) -> KeyBuffer {
+  pub fn new(key: KeyT, buffer: Vec<u8>) -> KeyBuffer {
     KeyBuffer {
-      key: KeyT::from_le_bytes(serialized_buffer[..KEY_LENGTH].try_into().unwrap()),
-      buffer: serialized_buffer[KEY_LENGTH..].to_vec(),
+      key,
+      buffer: SharedBytes::from(buffer).slice_all(),
     }
   }
 
-  pub fn deserialize_key(serialized_buffer: &[u8]) -> KeyT {
-    KeyT::from_le_bytes(serialized_buffer[..KEY_LENGTH].try_into().unwrap())
+  pub fn serialize(&self) -> Vec<u8> {
+    // TODO: return reference by concat slices
+    let mut serialized_buffer = Vec::with_capacity(KEY_LENGTH + self.buffer.len());
+    serialized_buffer.extend_from_slice(&self.key.to_le_bytes());
+    serialized_buffer.extend_from_slice(&self.buffer[..]);
+    serialized_buffer
+  }
+
+  pub fn deserialize(serialized_buffer: Vec<u8>) -> KeyBuffer {
+    let buffer_length = serialized_buffer.len() - KEY_LENGTH;
+    KeyBuffer {
+      key: KeyT::from_le_bytes(serialized_buffer[..KEY_LENGTH].try_into().unwrap()),
+      buffer: SharedBytes::from(serialized_buffer).slice(KEY_LENGTH, buffer_length),
+    }
+  }
+
+  pub fn deserialize_key(serialized_buffer: [u8; KEY_LENGTH]) -> KeyT {
+    KeyT::from_le_bytes(serialized_buffer)
   }
 
   pub fn serialized_size(&self) -> usize {

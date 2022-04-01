@@ -17,8 +17,8 @@ use crate::io::storage::Range;
 
 #[derive(Eq, PartialEq, Hash)]
 struct CacheKey {
-  url: Url,
-  page_idx: usize
+  pub url: Url,
+  pub page_idx: usize
 }
 
 impl std::fmt::Debug for CacheKey {
@@ -27,6 +27,16 @@ impl std::fmt::Debug for CacheKey {
       .field("url", &self.url.to_string())
       .field("page_idx", &self.page_idx)
       .finish()
+  }
+}
+
+impl CacheKey {
+  fn new(url: Url, page_idx: usize) -> CacheKey {
+    CacheKey { url, page_idx }
+  }
+
+  fn set_page(&mut self, page_idx: usize) {
+    self.page_idx = page_idx
   }
 }
 
@@ -90,10 +100,10 @@ impl ExternalStorage {
   }
 
   fn select_adaptor(&self, url: &Url) -> GResult<Rc<Box<dyn Adaptor>>> {
-    let scheme = url.scheme().to_string();
-    match self.adaptors.get(&scheme) {
+    let scheme = url.scheme();
+    match self.adaptors.get(scheme) {
       Some(entry) => Ok(entry.clone()),
-      None => Err(UnavailableStorageScheme::boxed(scheme, self.schemes.clone())),
+      None => Err(UnavailableStorageScheme::boxed(scheme.to_string(), self.schemes.clone())),
     }
   }
 }
@@ -107,11 +117,12 @@ impl ExternalStorage {
 
   pub fn warm_cache_at(&self, url: &Url, buffer: &SharedBytes, offset: usize) {
     assert!(url.query().is_none());
+    assert_eq!(offset % self.page_size, 0);
     let buffer_range = Range { offset, length: buffer.len()};
     self.range_to_pages(&buffer_range)
       // .into_par_iter()
       .for_each(|page_idx| {
-        let cache_key = self.cache_key(url.clone(), page_idx);
+        let cache_key = CacheKey::new(url.clone(), page_idx);
         let page_range = self.page_to_range(page_idx);
         let offset_l = page_range.offset - offset;  // underflow if offset not align
         let offset_r = std::cmp::min(buffer.len(), page_range.offset + page_range.length - offset);
@@ -123,21 +134,27 @@ impl ExternalStorage {
       });
   }
 
-  fn prepare_cache(&self, url: &Url, range: &Range) -> GResult<()> {
-    if let Some(missing_range) = self.missing_cache_range(url, range) {
-      let cache_bytes = self.select_adaptor(url)?.read_range(url, &missing_range)?;
-      self.warm_cache_at(url, &cache_bytes, missing_range.offset);
+  fn prepare_cache(&self, cache_key: &mut CacheKey, range: &Range) -> GResult<()> {
+    if let Some(missing_range) = self.missing_cache_range(cache_key, range) {
+      let cache_bytes = self.read_range_raw(cache_key, &missing_range)?;
+      self.warm_cache_at(&cache_key.url, &cache_bytes, missing_range.offset);
     }
     Ok(())
   }
 
-  fn missing_cache_range(&self, url: &Url, range: &Range) -> Option<Range> {
-    let missing_pages: Vec<usize> = self.range_to_pages(range)
-      .filter(|page_idx| self.miss_cache(url, *page_idx))
-      .collect();
-    if !missing_pages.is_empty() {
-      let first_range = self.page_to_range(missing_pages[0]);
-      let last_range = self.page_to_range(missing_pages[missing_pages.len() - 1]);
+  fn missing_cache_range(&self, cache_key: &mut CacheKey, range: &Range) -> Option<Range> {
+    let mut missing_iter = self.range_to_pages(range)
+      .filter(|page_idx| {
+        cache_key.set_page(*page_idx);
+        self.miss_cache(cache_key)
+      });
+    if let Some(missing_left) = missing_iter.next() {
+      let missing_right = match missing_iter.rev().next() {
+        Some(missing) => missing,
+        None => missing_left,
+      };
+      let first_range = self.page_to_range(missing_left);
+      let last_range = self.page_to_range(missing_right);
       let offset_l = first_range.offset;
       let offset_r = last_range.offset + last_range.length;
       return Some(Range { offset: offset_l, length: offset_r - offset_l })
@@ -145,27 +162,27 @@ impl ExternalStorage {
     None
   }
 
-  fn miss_cache(&self, url: &Url, page_idx: usize) -> bool {
-    let cache_key = self.cache_key(url.clone(), page_idx);
-    self.page_cache.borrow_mut().get(&cache_key).is_none()
+  fn miss_cache(&self, cache_key: &CacheKey) -> bool {
+    !self.page_cache.borrow_mut().contains(cache_key)
   }
 
-  fn read_through_page(&self, url: &Url, page_idx: usize) -> GResult<(usize, SharedBytes)> {
-    // make url with page idx
-    let cache_key = self.cache_key(url.clone(), page_idx);
-
+  fn read_through_page(&self, cache_key: &CacheKey) -> GResult<SharedBytes> {
     // check in cache
-    if let Some(cache_line) = self.page_cache.borrow_mut().get(&cache_key) {
+    if let Some(cache_line) = self.page_cache.borrow_mut().get(cache_key) {
       // cache hit
-      Ok((page_idx, cache_line.clone()))
+      Ok(cache_line.clone())
     } else {
       // cache miss even after prepare (can happen if eviction occurs in between)
       log::warn!("Cache missing after prepare {:?}", cache_key);
-      let cache_bytes = self.select_adaptor(url)?
-        .read_range(url, &Range { offset: page_idx * self.page_size, length: self.page_size })?;
-      // self.page_cache.put(cache_key, cache_bytes.clone());  // TODO: should we insert?
-      Ok((page_idx, cache_bytes))
+      self.read_range_raw(
+        cache_key,
+        &Range { offset: cache_key.page_idx * self.page_size, length: self.page_size },
+      )
     }
+  }
+
+  fn read_range_raw(&self, cache_key: &CacheKey, range: &Range) -> GResult<SharedBytes> {
+    self.select_adaptor(&cache_key.url)?.read_range(&cache_key.url, range)
   }
 
   fn range_to_pages(&self, range: &Range) -> std::ops::Range<usize> {
@@ -176,10 +193,6 @@ impl ExternalStorage {
   fn page_to_range(&self, page_idx: usize) -> Range {
     Range { offset: page_idx * self.page_size, length: self.page_size }
   }
-
-  fn cache_key(&self, url: Url, page_idx: usize) -> CacheKey {
-    CacheKey { url, page_idx }
-  }
 }
 
 impl ExternalStorage {
@@ -188,14 +201,16 @@ impl ExternalStorage {
   }
 
   pub fn read_range(&self, url: &Url, range: &Range) -> GResult<SharedByteView> {
-    if range.length <= self.total_page {
+    let mut cache_key = CacheKey::new(url.clone(), 0);
+    if range.length <= self.total_page * self.page_size {
       // warm up cache
-      self.prepare_cache(url, range)?;
+      self.prepare_cache(&mut cache_key, range)?;
 
       // collect page bytes
       let mut view = SharedByteView::default();
       for page_idx in self.range_to_pages(range) {
-        let (page_idx, page_cache) = self.read_through_page(url, page_idx)?;
+        cache_key.set_page(page_idx);
+        let page_cache = self.read_through_page(&cache_key)?;
         let page_range = self.page_to_range(page_idx);
         let page_l = range.offset.saturating_sub(page_range.offset);
         let page_r = std::cmp::min(page_cache.len(), (range.offset + range.length).saturating_sub(page_range.offset));
@@ -204,7 +219,7 @@ impl ExternalStorage {
       Ok(view)
     } else {
       // range too large for the cache
-      self.select_adaptor(url)?.read_range(url, &range).map(|sb| SharedByteView::from(sb))
+      self.read_range_raw(&cache_key, range).map(SharedByteView::from)
     }
   }
 

@@ -28,6 +28,7 @@ use crate::common::error::GenericError;
 use crate::common::error::GResult;
 use crate::common::error::InvalidAzureStorageUrl;
 use crate::common::error::MissingAzureAuthetication;
+use crate::common::error::OpenUrlError;
 use crate::common::error::UrlParseFilePathError;
 
 /* Data structs */
@@ -78,9 +79,10 @@ pub trait Adaptor: std::fmt::Debug {
 
 fn open_rfile(url: &Url) -> GResult<File> {
   assert!(url.scheme() == "file" || url.scheme() == "mmap");
-  Ok(OpenOptions::new()
-      .read(true)
-      .open(url.path())?)
+  match OpenOptions::new().read(true).open(url.path()) {
+    Ok(file) => Ok(file),
+    Err(e) => Err(OpenUrlError::boxed(url.to_string(), e.to_string())),
+  }
 }
 
 #[derive(Debug)]

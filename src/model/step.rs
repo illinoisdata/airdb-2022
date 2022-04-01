@@ -196,7 +196,7 @@ impl StepGreedyBuilder {
     let result = match self.stm.left_anchor() {
       Some(left_anchor) => {
         let step_buffer = self.serde.sketch(&self.stm, self.bundle_size)?;
-        Ok(Some(KeyBuffer{ key: left_anchor.key, buffer: step_buffer }))
+        Ok(Some(KeyBuffer::new(left_anchor.key, step_buffer)))
       },
       None => Ok(None),
     };
@@ -285,6 +285,9 @@ impl StepMultipleDrafter {
 mod tests {
   use super::*;
 
+  use crate::common::SharedByteSlice;
+
+
   fn test_same_model(model_1: &StepModel, model_2: &StepModel) {
     assert_eq!(model_1.anchors, model_2.anchors);
   }
@@ -358,7 +361,7 @@ mod tests {
     None
   }
 
-  fn assert_some_buffer(buffer: MaybeKeyBuffer) -> Vec<u8> {
+  fn assert_some_buffer(buffer: MaybeKeyBuffer) -> SharedByteSlice {
     assert!(buffer.is_some());
     buffer.unwrap().buffer
   }
@@ -389,7 +392,7 @@ mod tests {
 
     // check buffers
     test_same_model_box(
-      &stm_serde.reconstruct(&model_kb_4)?,
+      &stm_serde.reconstruct(&model_kb_4[..])?,
       &Box::new(StepModel {
         anchors: vec![
           KeyPosition { key: 0, position: 0 },
@@ -401,7 +404,7 @@ mod tests {
       110,
     );
     test_same_model_box(
-      &stm_serde.reconstruct(&model_kb_6)?,
+      &stm_serde.reconstruct(&model_kb_6[..])?,
       &Box::new(StepModel {
         anchors: vec![
           KeyPosition { key: 110, position: 50 },
@@ -413,7 +416,7 @@ mod tests {
       120,
     );
     test_same_model_box(
-      &stm_serde.reconstruct(&model_kb_8)?,
+      &stm_serde.reconstruct(&model_kb_8[..])?,
       &Box::new(StepModel {
         anchors: vec![
           KeyPosition { key: 120, position: 90 },
@@ -453,7 +456,7 @@ mod tests {
 
     // check buffers
     test_same_model_box(
-      &stm_serde.reconstruct(&model_kb_8)?,
+      &stm_serde.reconstruct(&model_kb_8[..])?,
       &Box::new(StepModel {
         anchors: vec![
           KeyPosition { key: 0, position: 0 },

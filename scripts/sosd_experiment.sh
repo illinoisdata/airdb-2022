@@ -24,6 +24,7 @@ RESET_SCRIPT=$7
 PROFILE="--affine-latency-ns 10000000 --affine-bandwidth-mbps 16.0"  # nfs
 # PROFILE="--affine-latency-ns 108000000 --affine-bandwidth-mbps 104.0"  # nfs2
 # PROFILE="--affine-latency-ns 22000 --affine-bandwidth-mbps 2500.0"  # ssd
+# PROFILE="--affine-latency-ns 260000 --affine-bandwidth-mbps 204.0"  # local
 LOG_LEVEL="info"
 # LOG_LEVEL="debug"
 # LOG_LEVEL="trace"
@@ -43,17 +44,17 @@ SOSD_BLOBS=(
   "books 800 uint64"
   "fb 200 uint64"
   # "lognormal 200 uint32"
-  "lognormal 200 uint64"
+  # "lognormal 200 uint64"
   # "normal 200 uint32"
-  "normal 200 uint64"
+  # "normal 200 uint64"
   # "osm_cellids 200 uint64"
   # "osm_cellids 400 uint64"
   # "osm_cellids 600 uint64"
   "osm_cellids 800 uint64"
   # "uniform_dense 200 uint32"
-  "uniform_dense 200 uint64"
+  # "uniform_dense 200 uint64"
   # "uniform_sparse 200 uint32"
-  "uniform_sparse 200 uint64"
+  # "uniform_sparse 200 uint64"
   "wiki_ts 200 uint64"
 )
 
@@ -65,7 +66,7 @@ build () {
   keyset_path="${KEYSET_ROOT}/${sosd_blob[0]}_${sosd_blob[1]}M_${sosd_blob[2]}_ks"
 
   set -x
-  RUST_LOG=airindex=${LOG_LEVEL},sosd_experiment=${LOG_LEVEL} RUST_BACKTRACE=full target/release/sosd_experiment --db-url "${DB_ROOT}/${blob_name}_${INDEX_TYPE}" --index-type ${INDEX_TYPE} --out-path sosd_build_out.jsons --dataset-name blob --sosd-blob-url "${BLOB_ROOT}/${blob_name}" --keyset-url "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} ${PROFILE} --do-build
+  RUST_LOG=airindex=${LOG_LEVEL},sosd_experiment=${LOG_LEVEL} RUST_BACKTRACE=full target/release/sosd_experiment --db-url "${DB_ROOT}/${blob_name}_${INDEX_TYPE}" --index-type ${INDEX_TYPE} --out-path sosd_build_out.jsons --dataset-name blob --sosd-blob-url "${BLOB_ROOT}/${blob_name}" --keyset-url "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} ${PROFILE} --no-cache --do-build
   set +x
 }
 

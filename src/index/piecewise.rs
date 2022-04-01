@@ -36,7 +36,7 @@ impl PiecewiseIndex {
 
   fn predict_from_reader(&self, reader: Box<dyn DataStoreReader>, key: &KeyT) -> GResult<KeyPositionRange> {
     let model_kb = PiecewiseIndex::select_relevant_kb(reader, key)?;
-    let model = self.model_serde.reconstruct(&model_kb.buffer)?;
+    let model = self.model_serde.reconstruct(&model_kb.buffer[..])?;
     log::trace!("Using model {:?} after key= {}", model, model_kb.key);
     Ok(model.predict(key))
   }

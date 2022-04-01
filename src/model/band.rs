@@ -384,7 +384,7 @@ impl BandConvexHullGreedyBuilder {
       Some(band_to_write) => {
         self.maybe_readjust(&band_to_write.band);
         let band_buffer = self.serde.sketch(&band_to_write.band)?;
-        Ok(Some(KeyBuffer{ key: band_to_write.anchor_key, buffer: band_buffer }))
+        Ok(Some(KeyBuffer::new(band_to_write.anchor_key, band_buffer)))
       },
       None => Ok(None),
     }
@@ -447,6 +447,9 @@ impl BandMultipleDrafter {
 mod tests {
   use super::*;
 
+  use crate::common::SharedByteSlice;
+
+
   fn test_same_model(model_1: &BandModel, model_2: &BandModel) {
     assert_eq!(model_1.kp_1, model_2.kp_1);
     assert_eq!(model_1.kp_2, model_2.kp_2);
@@ -503,7 +506,7 @@ mod tests {
     None
   }
 
-  fn assert_some_buffer(buffer: MaybeKeyBuffer) -> Vec<u8> {
+  fn assert_some_buffer(buffer: MaybeKeyBuffer) -> SharedByteSlice {
     assert!(buffer.is_some());
     buffer.unwrap().buffer
   }
@@ -534,7 +537,7 @@ mod tests {
 
     // check buffers
     test_same_model_box(
-      &bm_serde.reconstruct(&model_kb_3)?,
+      &bm_serde.reconstruct(&model_kb_3[..])?,
       &Box::new(BandModel {
         kp_1: KPDirection { x: 0, y: -20 },
         kp_2: KPDirection { x: 100, y: 10 },
@@ -544,7 +547,7 @@ mod tests {
       101,
     );
     test_same_model_box(
-      &bm_serde.reconstruct(&model_kb_6)?,
+      &bm_serde.reconstruct(&model_kb_6[..])?,
       &Box::new(BandModel {
         kp_1: KPDirection { x: 105, y: 10 },
         kp_2: KPDirection { x: 115, y: 70 },
@@ -554,7 +557,7 @@ mod tests {
       116,
     );
     test_same_model_box(
-      &bm_serde.reconstruct(&model_kb_7)?,
+      &bm_serde.reconstruct(&model_kb_7[..])?,
       &Box::new(BandModel {
         kp_1: KPDirection { x: 120, y: 90 },
         kp_2: KPDirection { x: 120, y: 1000 },
@@ -564,7 +567,7 @@ mod tests {
       121,
     );
     test_same_model_box(
-      &bm_serde.reconstruct(&model_kb_8)?,
+      &bm_serde.reconstruct(&model_kb_8[..])?,
       &Box::new(BandModel {
         kp_1: KPDirection { x: 131, y: 1000 },
         kp_2: KPDirection { x: 131, y: 1915 },
@@ -602,7 +605,7 @@ mod tests {
 
     // check buffers
     test_same_model_box(
-      &bm_serde.reconstruct(&model_kb_7)?,
+      &bm_serde.reconstruct(&model_kb_7[..])?,
       &Box::new(BandModel {
         kp_1: KPDirection { x: 0, y: -910 },
         kp_2: KPDirection { x: 120, y: 90 },
@@ -612,7 +615,7 @@ mod tests {
       121,
     );
     test_same_model_box(
-      &bm_serde.reconstruct(&model_kb_8)?,
+      &bm_serde.reconstruct(&model_kb_8[..])?,
       &Box::new(BandModel {
         kp_1: KPDirection { x: 131, y: 1000 },
         kp_2: KPDirection { x: 131, y: 1915 },

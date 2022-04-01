@@ -13,6 +13,21 @@ impl Error for UrlParseFilePathError {}
 unsafe impl Send for UrlParseFilePathError {}
 unsafe impl Sync for UrlParseFilePathError {}
 
+#[derive(Display, Debug, Clone)]
+#[display(fmt = "Failed to open {}, due to {}", path, reason)]
+pub struct OpenUrlError {
+  path: String,
+  reason: String,
+}
+impl OpenUrlError {
+  pub fn boxed(path: String, reason: String) -> GenericError {
+    Box::new(OpenUrlError { path, reason })
+  }
+}
+impl Error for OpenUrlError {}
+unsafe impl Send for OpenUrlError {}
+unsafe impl Sync for OpenUrlError {}
+
 
 #[derive(Display, Debug, Clone)]
 pub struct MissingAzureAuthetication {

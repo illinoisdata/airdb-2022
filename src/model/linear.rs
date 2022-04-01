@@ -254,7 +254,7 @@ impl DoubleLinearGreedyCorridorBuilder {
     };
     let dlinear_model = DoubleLinearModel { lower_line, upper_line };
     let dlinear_buffer = self.serde.sketch(&dlinear_model)?;
-    Ok(Some(KeyBuffer{ key: dlinear_model.lower_line.left_kp.key, buffer: dlinear_buffer }))
+    Ok(Some(KeyBuffer::new(dlinear_model.lower_line.left_kp.key, dlinear_buffer)))
   }
 }
 
@@ -363,7 +363,10 @@ impl DoubleLinearMultipleDrafter {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  use crate::common::SharedByteSlice;
   use crate::model::KeyPositionCollection;
+
 
   fn test_same_model(model_1: &Box<dyn Model>, model_2: &Box<DoubleLinearModel>) {
     // test coverage
@@ -424,7 +427,7 @@ mod tests {
     None
   }
 
-  fn assert_some_buffer(buffer: MaybeKeyBuffer) -> Vec<u8> {
+  fn assert_some_buffer(buffer: MaybeKeyBuffer) -> SharedByteSlice {
     assert!(buffer.is_some());
     buffer.unwrap().buffer
   }
@@ -454,7 +457,7 @@ mod tests {
     assert_eq!(dlm_loads, vec![915]);
 
     // check buffers
-    test_same_model(&dlm_serde.reconstruct(&model_kb_2)?, &Box::new(DoubleLinearModel {
+    test_same_model(&dlm_serde.reconstruct(&model_kb_2[..])?, &Box::new(DoubleLinearModel {
       lower_line: LinearModel {
         left_kp: KeyPosition { key: 0, position: 0 },
         right_kp: KeyPosition { key: 50, position: 7 }, 
@@ -464,7 +467,7 @@ mod tests {
         right_kp: KeyPosition { key: 50, position: 10 }, 
       },
     }));
-    test_same_model(&dlm_serde.reconstruct(&model_kb_6)?, &Box::new(DoubleLinearModel {
+    test_same_model(&dlm_serde.reconstruct(&model_kb_6[..])?, &Box::new(DoubleLinearModel {
       lower_line: LinearModel {
         left_kp: KeyPosition { key: 100, position: 10 },
         right_kp: KeyPosition { key: 115, position: 70 }, 
@@ -474,7 +477,7 @@ mod tests {
         right_kp: KeyPosition { key: 115, position: 90 }, 
       },
     }));
-    test_same_model(&dlm_serde.reconstruct(&model_kb_8)?, &Box::new(DoubleLinearModel {
+    test_same_model(&dlm_serde.reconstruct(&model_kb_8[..])?, &Box::new(DoubleLinearModel {
       lower_line: LinearModel {
         left_kp: KeyPosition { key: 120, position: 90 },
         right_kp: KeyPosition { key: 131, position: 1000 }, 
@@ -512,7 +515,7 @@ mod tests {
     assert_eq!(dlm_loads, vec![1115]);
 
     // check buffers
-    test_same_model(&dlm_serde.reconstruct(&model_kb_6)?, &Box::new(DoubleLinearModel {
+    test_same_model(&dlm_serde.reconstruct(&model_kb_6[..])?, &Box::new(DoubleLinearModel {
       lower_line: LinearModel {
         left_kp: KeyPosition { key: 0, position: 0 },
         right_kp: KeyPosition { key: 115, position: 11 }, 
@@ -522,7 +525,7 @@ mod tests {
         right_kp: KeyPosition { key: 115, position: 90 }, 
       },
     }));
-    test_same_model(&dlm_serde.reconstruct(&model_kb_8)?, &Box::new(DoubleLinearModel {
+    test_same_model(&dlm_serde.reconstruct(&model_kb_8[..])?, &Box::new(DoubleLinearModel {
       lower_line: LinearModel {
         left_kp: KeyPosition { key: 120, position: 90 },
         right_kp: KeyPosition { key: 131, position: 1000 }, 

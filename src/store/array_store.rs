@@ -19,6 +19,7 @@ use crate::store::DataStoreReader;
 use crate::store::DataStoreReaderIter;
 use crate::store::DataStoreWriter;
 use crate::store::key_buffer::KeyBuffer;
+use crate::store::key_position::KEY_LENGTH;
 use crate::store::key_position::KeyPositionCollection;
 use crate::store::key_position::PositionT;
 use crate::store::KeyT;
@@ -257,22 +258,25 @@ impl ArrayStoreReader {
 
   pub fn key_at(&self, idx: usize) -> KeyT {
     let offset = idx * self.data_size;
-    KeyBuffer::deserialize_key(&self.array_view.clone_within(offset .. offset + self.data_size))
+    let key_bytes = self.array_view.clone_within(offset .. offset + KEY_LENGTH);
+    KeyBuffer::deserialize_key(key_bytes.try_into().unwrap())
   }
 
   pub fn kb_at(&self, idx: usize) -> KeyBuffer {
     let offset = idx * self.data_size;
-    KeyBuffer::deserialize(&self.array_view.clone_within(offset .. offset + self.data_size))
+    KeyBuffer::deserialize(self.array_view.clone_within(offset .. offset + self.data_size))
   }
 
   pub fn first_of_with_rank(&self, key: KeyT) -> GResult<(KeyBuffer, usize)> {
     // binary search
     assert!(self.array_view.len() % self.data_size == 0);
     let mut l = 0;
-    let mut r = self.array_view.len() / self.data_size ;
+    let mut r = self.array_view.len() / self.data_size;
+    let mut mid;
+    let mut mid_key;
     while l + 1 < r {
-      let mid = l + (r - l) / 2;
-      let mid_key = self.key_at(mid);
+      mid = l + (r - l) / 2;
+      mid_key = self.key_at(mid);
       match mid_key.cmp(&key) {  // smallest mid_key <= key
           std::cmp::Ordering::Less => { l = mid },
           std::cmp::Ordering::Equal => { r = mid },
@@ -318,7 +322,7 @@ impl<'a> Iterator for ArrayStoreReaderIter<'a> {
   type Item = KeyBuffer;
   
   fn next(&mut self) -> Option<Self::Item> {
-    self.next_block().map(|dbuffer| KeyBuffer::deserialize(&dbuffer))
+    self.next_block().map(KeyBuffer::deserialize)
   }
 }
 
@@ -386,7 +390,7 @@ mod tests {
     let _kps = {
       let mut bwriter = arrstore.begin_write()?;
       for (key, value) in test_keys.iter().zip(test_buffers.iter()) {
-        bwriter.write(&KeyBuffer{ key: *key, buffer: value.to_vec()})?;
+        bwriter.write(&KeyBuffer::new(*key, value.to_vec()))?;
       }
     };
     assert_eq!(arrstore.state.length, 0, "Total pages should be zero without commit");
@@ -395,7 +399,7 @@ mod tests {
     let kps = {
       let mut bwriter = arrstore.begin_write()?;
       for (key, value) in test_keys.iter().zip(test_buffers.iter()) {
-        bwriter.write(&KeyBuffer{ key: *key, buffer: value.to_vec()})?;
+        bwriter.write(&KeyBuffer::new(*key, value.to_vec()))?;
       }
       bwriter.commit()?
     };
@@ -422,7 +426,7 @@ mod tests {
       let kb = reader_iter.next().expect("Expect more data buffer");
       assert_eq!(kb.key, cur_key, "Read key does not match with the given map");
       assert_eq!(kb.key, test_keys[idx], "Read key does not match");
-      assert_eq!(kb.buffer, test_buffers[idx].to_vec(), "Read buffer does not match");
+      assert_eq!(&kb.buffer[..], test_buffers[idx], "Read buffer does not match");
 
       // check completeness
       assert!(reader_iter.next().is_none(), "Expected no more data buffer")
@@ -444,7 +448,7 @@ mod tests {
       for idx in 2..7 {  
         let kb = reader_iter.next().expect("Expect more data buffer");
         assert_eq!(kb.key, test_keys[idx], "Read key does not match (partial)");
-        assert_eq!(kb.buffer, test_buffers[idx].to_vec(), "Read buffer does not match (partial)");
+        assert_eq!(&kb.buffer[..], test_buffers[idx], "Read buffer does not match (partial)");
       }
       assert!(reader_iter.next().is_none(), "Expected no more data buffer (partial)")
     }
@@ -457,7 +461,7 @@ mod tests {
         // get next and check correctness
         let kb = reader_iter.next().expect("Expect more data buffer");
         assert_eq!(kb.key, *cur_key, "Read key does not match");
-        assert_eq!(kb.buffer, cur_value.to_vec(), "Read buffer does not match");
+        assert_eq!(&kb.buffer[..], cur_value, "Read buffer does not match");
       } 
       assert!(reader_iter.next().is_none(), "Expected no more data buffer (read all)")
     }

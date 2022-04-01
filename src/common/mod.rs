@@ -144,17 +144,16 @@ impl SharedByteView {
     let mut slice_offset = self.acc_lengths[slice_idx] - self.slices[slice_idx].len();
 
     // copy relevant part(s)
-    let mut buffer = vec![0u8; range.end - range.start];
-    let mut buffer_offset = 0;
+    let length = range.end - range.start;
+    let mut buffer = Vec::with_capacity(length);
     while slice_offset < range.end {
       let shift_offset = range.start.saturating_sub(slice_offset);
       let part_length = std::cmp::min(
         self.slices[slice_idx].len() - shift_offset,
-        buffer.len() - buffer_offset
+        length - buffer.len()
       );
       let part_slice = &self.slices[slice_idx][shift_offset .. shift_offset + part_length];
-      buffer[buffer_offset .. buffer_offset + part_length].clone_from_slice(part_slice);
-      buffer_offset += part_length;
+      buffer.extend_from_slice(part_slice);
       slice_offset += self.slices[slice_idx].len();
       slice_idx += 1;
     }
@@ -162,11 +161,9 @@ impl SharedByteView {
   }
 
   pub fn clone_all(&self) -> Vec<u8> {
-    let mut buffer = vec![0u8; self.total_length];
-    let mut buffer_offset = 0;
+    let mut buffer = Vec::with_capacity(self.total_length);
     for slice in &self.slices {
-      buffer[buffer_offset .. buffer_offset + slice.len()].clone_from_slice(&slice[..]);
-      buffer_offset += slice.len();
+      buffer.extend_from_slice(&slice[..]);
     }
     buffer
   }
