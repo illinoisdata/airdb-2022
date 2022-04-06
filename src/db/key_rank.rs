@@ -88,13 +88,19 @@ impl SOSDRankDB {
     Ok(kps)
   }
 
-  pub fn generate_keyset(&self, kps: &KeyPositionCollection, keyset_path: String, num_keyset: usize) -> GResult<()> {
+  pub fn generate_keyset(
+    &self,
+    kps: &KeyPositionCollection,
+    keyset_path: String,
+    num_keyset: usize,
+    seed: u64,
+  ) -> GResult<()> {
     let mut keyset_file = OpenOptions::new()
       .create(true)
       .write(true)
       .truncate(true)
       .open(keyset_path.as_str())?;
-    let mut rng = Pcg64::seed_from_u64(54613789);  // "random" seed via cat typing asdasd
+    let mut rng = Pcg64::seed_from_u64(seed);  // "random" seed via cat typing asdasd
 
     for _ in 0..num_keyset {
       let idx = rng.gen_range(0..kps.len());

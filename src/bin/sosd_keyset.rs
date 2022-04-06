@@ -25,6 +25,9 @@ pub struct Cli {
   /// number of elements, in millions (typically 200, 400, 500, 800)
   #[structopt(long)]
   sosd_size: usize,
+  /// seed for randomization
+  #[structopt(long)]
+  sosd_seed: u64,
   
   /// relative path from root_path to path to write the keyset file
   #[structopt(long)]
@@ -49,7 +52,7 @@ fn main_guarded() -> GResult<()> {
   observe_kps(&kps, 5);
 
   // randomly select a subset of keys
-  sosd_db.generate_keyset(&kps, args.keyset_path.clone(), args.num_keyset)?;
+  sosd_db.generate_keyset(&kps, args.keyset_path.clone(), args.num_keyset, args.sosd_seed)?;
   println!("Wrote keyset file at {} with {} keys", args.keyset_path, args.num_keyset);
   Ok(())
 }
