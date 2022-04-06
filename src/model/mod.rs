@@ -5,6 +5,7 @@ use std::time::Duration;
 use crate::common::error::GResult;
 use crate::io::profile::StorageProfile;
 use crate::meta::Context;
+use crate::model::load::LoadDistribution;
 use crate::store::key_buffer::KeyBuffer;
 use crate::store::key_position::KeyPositionCollection;
 use crate::store::key_position::KeyPositionRange;
@@ -25,13 +26,14 @@ pub trait Model: Debug {
 
 pub trait ModelRecon: ModelReconMetaserde + Debug {
   fn reconstruct(&self, buffer: &[u8]) -> GResult<Box<dyn Model>>;
+  fn get_load(&self) -> Vec<LoadDistribution>;
 }
 
 #[derive(Serialize, Deserialize)]
 pub enum ModelReconMeta {
   DoubleLinear { meta: linear::DoubleLinearModelReconMeta },
-  Step { meta: step::StepModelReconMeta },
-  Band { meta: band::BandModelReconMeta },
+  Step { meta: Box<step::StepModelReconMeta> },
+  Band { meta: Box<band::BandModelReconMeta> },  // BandModelReconMeta is large
 }
 
 pub trait ModelReconMetaserde {
@@ -42,8 +44,8 @@ impl ModelReconMeta {
   pub fn from_meta(meta: ModelReconMeta, ctx: &Context) -> GResult<Box<dyn ModelRecon>> {
     let store = match meta {
       ModelReconMeta::DoubleLinear { meta } => Box::new(linear::DoubleLinearModelRecon::from_meta(meta, ctx)?) as Box<dyn ModelRecon>,
-      ModelReconMeta::Step { meta } => Box::new(step::StepModelRecon::from_meta(meta, ctx)?) as Box<dyn ModelRecon>,
-      ModelReconMeta::Band { meta } => Box::new(band::BandModelRecon::from_meta(meta, ctx)?) as Box<dyn ModelRecon>,
+      ModelReconMeta::Step { meta } => Box::new(step::StepModelRecon::from_meta(*meta, ctx)?) as Box<dyn ModelRecon>,
+      ModelReconMeta::Band { meta } => Box::new(band::BandModelRecon::from_meta(*meta, ctx)?) as Box<dyn ModelRecon>,
     };
     Ok(store)
   }
@@ -55,7 +57,6 @@ impl ModelReconMeta {
 pub struct BuilderFinalReport {
   pub maybe_model_kb: MaybeKeyBuffer,  // last buffer if any
   pub serde: Box<dyn ModelRecon>,  // for future deserialization
-  pub model_loads: Vec<usize>,  // search load(s) in bytes assuming having the whole model
 }
 
 pub trait ModelBuilder: Debug + Sync {
@@ -84,6 +85,7 @@ pub trait ModelDrafter: Sync + Debug {
 
 
 pub mod toolkit;
+pub mod load;
 pub mod linear;
 pub mod step;
 pub mod band;

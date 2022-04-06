@@ -5,6 +5,7 @@ use std::io;
 use crate::common::error::GResult;
 use crate::meta::Context;
 use crate::model::BuilderFinalReport;
+use crate::model::LoadDistribution;
 use crate::model::MaybeKeyBuffer;
 use crate::model::Model;
 use crate::model::ModelBuilder;
@@ -63,6 +64,11 @@ impl StepModel {
     }
   }
 
+  fn load_at(&self, idx: usize) -> PositionT {
+    assert!((0..self.anchors.len()-1).contains(&idx));
+    self.anchors[idx + 1].position - self.anchors[idx].position
+  }
+
   // fn right_anchor(&self) -> Option<&KeyPosition> {
   //   if self.is_empty() {
   //     None
@@ -90,15 +96,26 @@ impl Model for StepModel {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct StepModelRecon {
-  max_load: Option<PositionT>,
+  load: LoadDistribution,
 }
 
 impl StepModelRecon {
   fn new() -> StepModelRecon {
-    StepModelRecon { max_load: None }
+    StepModelRecon { load: LoadDistribution::default() }
   }
 
-  fn sketch(&mut self, stm: &StepModel, bundle_size: usize) -> io::Result<Vec<u8>> {
+  fn sketch(
+    &mut self,
+    stm: &StepModel,
+    bundle_size: usize,
+    num_samples: &[usize],
+  ) -> io::Result<Vec<u8>> {
+    // update load distribution
+    assert_eq!(num_samples.len(), stm.anchors.len() - 1);
+    for (idx, samples) in num_samples.iter().enumerate() {
+      self.load.add(stm.load_at(idx) as f64, (*samples).try_into().unwrap());
+    }
+
     // turn the model into a buffer
     let mut model_buffer = vec![];
 
@@ -106,7 +123,10 @@ impl StepModelRecon {
     for anchor in &stm.anchors {
       model_buffer.write_uint::<BigEndian>(anchor.key, KEY_LENGTH)?;
       model_buffer.write_uint::<BigEndian>(anchor.position as u64, POSITION_LENGTH)?;
+
     }
+
+    // fill until constant size (for space efficiency)
     let fillin_anchor = &stm.anchors[stm.anchors.len() - 1];
     for _ in stm.anchors.len()..bundle_size {
       model_buffer.write_uint::<BigEndian>(fillin_anchor.key, KEY_LENGTH)?;
@@ -129,10 +149,6 @@ impl StepModelRecon {
     }
     Ok(stm)
   }
-
-  fn set_max_load(&mut self, max_load: usize) {
-    self.max_load = Some(max_load)
-  }
 }
 
 const ANCHOR_LENGTH: usize = KEY_LENGTH + POSITION_LENGTH;
@@ -142,6 +158,10 @@ impl ModelRecon for StepModelRecon {
     let stm = self.reconstruct_raw(buffer)?;
     Ok(Box::new(stm))
   }
+
+  fn get_load(&self) -> Vec<LoadDistribution> {
+    vec![self.load.clone()]
+  }
 }
 
 
@@ -149,7 +169,7 @@ pub type StepModelReconMeta = StepModelRecon;
 
 impl ModelReconMetaserde for StepModelRecon {  // for Metaserde
   fn to_meta(&self, _ctx: &mut Context) -> GResult<ModelReconMeta> {
-    Ok(ModelReconMeta::Step { meta: self.clone() })
+    Ok(ModelReconMeta::Step { meta: Box::new(self.clone()) })
   }
 }
 
@@ -167,6 +187,7 @@ pub struct StepGreedyBuilder {
   bundle_size: usize,  // number of anchors per submodel
   serde: StepModelRecon,
   stm: StepModel,
+  num_samples: Vec<usize>,
   cur_kpr: Option<KeyPositionRange>,  // current active range
 }
 
@@ -187,6 +208,7 @@ impl StepGreedyBuilder {
       bundle_size,
       serde: StepModelRecon::new(),
       stm: StepModel::new(),
+      num_samples: Vec::new(),
       cur_kpr: None,
     }
   }
@@ -195,12 +217,16 @@ impl StepGreedyBuilder {
     assert!(self.stm.len() <= self.bundle_size);
     let result = match self.stm.left_anchor() {
       Some(left_anchor) => {
-        let step_buffer = self.serde.sketch(&self.stm, self.bundle_size)?;
+        let step_buffer = self.serde.sketch(&self.stm, self.bundle_size, &self.num_samples)?;
         Ok(Some(KeyBuffer::new(left_anchor.key, step_buffer)))
       },
       None => Ok(None),
     };
     self.stm = StepModel::new();
+    self.num_samples = match self.cur_kpr {
+      Some(_) => vec![1],
+      None => Vec::new(),
+    };
     result
   }
 }
@@ -211,16 +237,21 @@ impl ModelBuilder for StepGreedyBuilder {
     match &mut self.cur_kpr {
       None => {
         self.cur_kpr = Some(kpr.clone());
+        self.num_samples.push(1);
       },
       Some(the_cur_kpr) => {
         if the_cur_kpr.offset + self.max_load >= kpr.offset + kpr.length {
           // include in anchor
           the_cur_kpr.key_r = kpr.key_r;
           the_cur_kpr.length = kpr.offset + kpr.length - the_cur_kpr.offset;
+          if let Some(last) = self.num_samples.last_mut() {
+            *last += 1;
+          }
         } else {
           // not inclide in anchor, starting new submodel
           self.stm.push_kpr(the_cur_kpr);
           self.cur_kpr = Some(kpr.clone());
+          self.num_samples.push(1);
         }
       },
     };
@@ -228,6 +259,7 @@ impl ModelBuilder for StepGreedyBuilder {
     // check if saturated to write
     if self.stm.len() == self.bundle_size - 1 {
       self.stm.push_kpr(self.cur_kpr.as_ref().unwrap());
+      self.num_samples.pop();
       Ok(self.generate_segment()?)
     } else {
       Ok(None)
@@ -239,11 +271,9 @@ impl ModelBuilder for StepGreedyBuilder {
       self.stm.push_kpr(the_cur_kpr);
       self.stm.push_kpr_closing(the_cur_kpr);
     }
-    self.serde.set_max_load(self.max_load);
     Ok(BuilderFinalReport {
       maybe_model_kb: self.generate_segment()?,
       serde: Box::new(self.serde),
-      model_loads: vec![self.max_load],
     })
   }
 }
@@ -323,9 +353,11 @@ mod tests {
         KeyPosition { key: 110, position: 50 },
       ],
     });
+    let num_samples = vec![10, 20];
+    let num_samples_fillin = vec![10, 20, 30, 10];
 
     // sketch this model
-    let stm_buffer = stm_serde.sketch(&stm, 3)?;
+    let stm_buffer = stm_serde.sketch(&stm, 3, &num_samples)?;
     assert!(stm_buffer.len() > 0);
 
     // reconstruct
@@ -333,7 +365,7 @@ mod tests {
     test_same_model(&stm_recon, &stm);
 
     // sketch this model, higher bundle size
-    let stm_buffer_fillin = stm_serde.sketch(&stm_fillin, 5)?;
+    let stm_buffer_fillin = stm_serde.sketch(&stm_fillin, 5, &num_samples_fillin)?;
     assert!(stm_buffer_fillin.len() > 0);
 
     // reconstruct
@@ -385,10 +417,10 @@ mod tests {
     let BuilderFinalReport {
       maybe_model_kb: last_buffer,
       serde: stm_serde,
-      model_loads: stm_loads,
     } = stm_builder.finalize()?;
     let model_kb_8 = assert_some_buffer(last_buffer);
-    assert_eq!(stm_loads, vec![30]);
+    let max_load: Vec<usize> = stm_serde.get_load().iter().map(|load| load.max()).collect();
+    assert_eq!(max_load, vec![915]);
 
     // check buffers
     test_same_model_box(
@@ -449,10 +481,10 @@ mod tests {
     let BuilderFinalReport {
       maybe_model_kb: last_buffer,
       serde: stm_serde,
-      model_loads: stm_loads,
     } = stm_builder.finalize()?;
     let model_kb_8 = assert_some_buffer(last_buffer);
-    assert_eq!(stm_loads, vec![1000]);
+    let max_load: Vec<usize> = stm_serde.get_load().iter().map(|load| load.max()).collect();
+    assert_eq!(max_load, vec![1000]);
 
     // check buffers
     test_same_model_box(

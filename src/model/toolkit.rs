@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use crate::model::BuilderFinalReport;
 use crate::model::GResult;
 use crate::model::KeyPositionCollection;
+use crate::model::LoadDistribution;
 use crate::model::ModelBuilder;
 use crate::model::ModelDraft;
 use crate::model::ModelDrafter;
@@ -97,6 +98,15 @@ impl BuilderAsDrafter {
   pub fn wrap(builder_producer: Box<BuilerProducer>) -> BuilderAsDrafter {
     BuilderAsDrafter { builder_producer }
   }
+
+  fn summarize_loads(&self, loads: &[LoadDistribution]) -> Vec<usize> {
+    // TODO: configurable?
+    loads.iter()
+      // .map(|load| load.max())
+      // .map(|load| load.average())
+      .map(|load| load.percentile(50.0))
+      .collect()
+  }
 }
 
 impl ModelDrafter for BuilderAsDrafter {
@@ -112,17 +122,18 @@ impl ModelDrafter for BuilderAsDrafter {
     }
 
     // finalize last bits of model
-    let BuilderFinalReport { maybe_model_kb, serde, model_loads } = model_builder.finalize()?;
+    let BuilderFinalReport { maybe_model_kb, serde } = model_builder.finalize()?;
     if let Some(model_kb) = maybe_model_kb {
         total_size += model_kb.serialized_size();
         key_buffers.push(model_kb);
     }
 
     // estimate cost
+    let model_load_summary = self.summarize_loads(&serde.get_load());
     let (est_complexity_loads, _) = StepComplexity::measure(profile, total_size);
     let complexity_cost = profile.sequential_cost(&est_complexity_loads);
-    let model_cost = profile.sequential_cost(&model_loads);
-    let total_loads = [est_complexity_loads, model_loads].concat();
+    let model_cost = profile.sequential_cost(&model_load_summary);
+    let total_loads = [est_complexity_loads, model_load_summary].concat();
     let cost = profile.sequential_cost(&total_loads);
     log::info!(
       "{:?}: {} submodels, loads= {:?}, cost= {:?} (c/m: {:?}/{:?})",
@@ -133,6 +144,7 @@ impl ModelDrafter for BuilderAsDrafter {
       complexity_cost,
       model_cost,
     );
+    log::debug!("{:?}", serde.get_load());
     Ok(ModelDraft{ key_buffers, serde, loads: total_loads, cost })
   }
 }

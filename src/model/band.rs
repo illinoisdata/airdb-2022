@@ -5,6 +5,7 @@ use std::io;
 use crate::common::error::GResult;
 use crate::meta::Context;
 use crate::model::BuilderFinalReport;
+use crate::model::LoadDistribution;
 use crate::model::MaybeKeyBuffer;
 use crate::model::Model;
 use crate::model::ModelBuilder;
@@ -233,15 +234,18 @@ impl ConvexHull {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BandModelRecon {
-  max_load: Option<PositionT>,
+  load: LoadDistribution,
 }
 
 impl BandModelRecon {
   fn new() -> BandModelRecon {
-    BandModelRecon { max_load: None }
+    BandModelRecon { load: LoadDistribution::default() }
   }
 
-  fn sketch(&mut self, bm: &BandModel) -> io::Result<Vec<u8>> {
+  fn sketch(&mut self, bm: &BandModel, num_samples: usize) -> io::Result<Vec<u8>> {
+    // update load distribution
+    self.load.add(bm.width() as f64, num_samples.try_into().unwrap());
+
     // turn the model into a buffer
     let mut model_buffer = vec![];
     model_buffer.write_i64::<BigEndian>(bm.kp_1.x)?;
@@ -266,10 +270,6 @@ impl BandModelRecon {
       width: model_buffer.read_uint::<BigEndian>(POSITION_LENGTH)? as PositionT,
     })
   }
-
-  fn set_max_load(&mut self, max_load: usize) {
-    self.max_load = Some(max_load)
-  }
 }
 
 pub type BandModelReconMeta = BandModelRecon;
@@ -279,11 +279,15 @@ impl ModelRecon for BandModelRecon {
     let model = self.reconstruct_raw(buffer)?;
     Ok(Box::new(model))
   }
+
+  fn get_load(&self) -> Vec<LoadDistribution> {
+    vec![self.load.clone()]
+  }
 }
 
 impl ModelReconMetaserde for BandModelRecon {  // for Metaserde
   fn to_meta(&self, _ctx: &mut Context) -> GResult<ModelReconMeta> {
-    Ok(ModelReconMeta::Band { meta: self.clone() })
+    Ok(ModelReconMeta::Band { meta: Box::new(self.clone()) })
   }
 }
 
@@ -297,10 +301,10 @@ impl BandModelRecon {  // for Metaserde
 
 pub struct BandConvexHullGreedyBuilder {
   max_load: PositionT,
-  max_load_observed: PositionT,
   serde: BandModelRecon,
   hull: ConvexHull,
   feasible_band: Option<AnchoredBand>,
+  current_samples: usize,
 }
 
 impl std::fmt::Debug for BandConvexHullGreedyBuilder {
@@ -315,10 +319,10 @@ impl BandConvexHullGreedyBuilder {
   pub fn new(max_load: PositionT) -> BandConvexHullGreedyBuilder {
     BandConvexHullGreedyBuilder {
       max_load,
-      max_load_observed: 0,
       serde: BandModelRecon::new(),
       hull: ConvexHull::new(),
       feasible_band: None,
+      current_samples: 0,
     }
   }
 
@@ -331,26 +335,22 @@ impl BandConvexHullGreedyBuilder {
     self.hull.push_right_upper(KeyPosition { key: kpr.key_r, position: kpr.offset + kpr.length });
   }
 
-  fn maybe_readjust(&mut self, bm: &BandModel) {
-    if self.max_load_observed < bm.width() {
-      // log::info!("Adjusting max_load to {}", bm.width());
-      // log::info!("Due to {:?}", bm);
-      // log::info!("Hull {:#?}", self.hull);
-      self.max_load_observed = bm.width();
-    }
-  }
-
   fn start_hull_with(&mut self, kpr: &KeyPositionRange) {
     // log::info!("Hull size at full {} / {}", self.hull.lower_kps.len(), self.hull.upper_kps.len());
     self.hull = ConvexHull::new();
     self.push_to_hull(kpr);
     let new_band = self.hull.make_band()
       .expect("Convex hull should produce a band after adding a kpr"); 
-    // self.maybe_readjust(&new_band);
     self.feasible_band = Some(new_band);
+    self.current_samples = 1;
   }
 
-  fn consume_produce_feasible(&mut self, kpr: &KeyPositionRange) -> Option<AnchoredBand> {
+  fn continue_hull_with(&mut self, band: AnchoredBand) {
+    self.feasible_band = Some(band);
+    self.current_samples += 1;
+  }
+
+  fn consume_produce_feasible(&mut self, kpr: &KeyPositionRange) -> Option<(AnchoredBand, usize)> {
     // try adding points to convex hull and get a band model
     self.push_to_hull(kpr);
     let current_band = self.hull.make_band()
@@ -362,52 +362,48 @@ impl BandConvexHullGreedyBuilder {
         Some(the_feasible_band) => {
           // adding this kpr breaks the hull capacity
           // repack kpr to the new hull and ship previously feasible band
+          let num_samples = self.current_samples;
           self.start_hull_with(kpr);
-          Some(the_feasible_band)
+          Some((the_feasible_band, num_samples))
         },
         None => {
           // this hapeens when the only kpr is too large to fit in max_load
-          // increasing the max load for future insert
-          // self.maybe_readjust(&current_band);
-          self.feasible_band = Some(current_band);
+          self.continue_hull_with(current_band);
           None  // not writing this yet...
         }
       }
     } else {
-      self.feasible_band = Some(current_band);
+      // band's width is still within max_load
+      self.continue_hull_with(current_band);
       None
     }
   }
 
-  fn generate_segment(&mut self, band: Option<AnchoredBand>) -> GResult<MaybeKeyBuffer> {
-    match band {
-      Some(band_to_write) => {
-        self.maybe_readjust(&band_to_write.band);
-        let band_buffer = self.serde.sketch(&band_to_write.band)?;
-        Ok(Some(KeyBuffer::new(band_to_write.anchor_key, band_buffer)))
-      },
-      None => Ok(None),
-    }
+  fn generate_segment(&mut self, band: AnchoredBand, num_samples: usize) -> GResult<MaybeKeyBuffer> {
+    let band_buffer = self.serde.sketch(&band.band, num_samples)?;
+    Ok(Some(KeyBuffer::new(band.anchor_key, band_buffer)))
   }
 }
 
 impl ModelBuilder for BandConvexHullGreedyBuilder {
   fn consume(&mut self, kpr: &KeyPositionRange) -> GResult<MaybeKeyBuffer> {
-    let band = self.consume_produce_feasible(kpr);
-    self.generate_segment(band)
+    if let Some((band, num_samples)) = self.consume_produce_feasible(kpr) {
+      self.generate_segment(band, num_samples)
+    } else {
+      Ok(None)
+    }
   }
 
   fn finalize(mut self: Box<Self>) -> GResult<BuilderFinalReport> {
     // make last band if needed
-    let band = self.hull.make_band();
-    let maybe_last_kb = self.generate_segment(band)?;
-    
-    self.serde.set_max_load(self.max_load);
+    let maybe_last_kb = if let Some(band) = self.hull.make_band() {
+      self.generate_segment(band, self.current_samples)?
+    } else {
+      None
+    };
     Ok(BuilderFinalReport {
       maybe_model_kb: maybe_last_kb,
       serde: Box::new(self.serde),
-      model_loads: vec![self.max_load],  // TODO: SWTICH BACK
-      // model_loads: vec![self.max_load_observed],
     })
   }
 }
@@ -466,7 +462,7 @@ mod tests {
     });
 
     // sketch this model
-    let bm_buffer = bm_serde.sketch(&bm)?;
+    let bm_buffer = bm_serde.sketch(&bm, 1  /* num_samples */)?;
     assert!(bm_buffer.len() > 0);
 
     // reconstruct
@@ -530,10 +526,10 @@ mod tests {
     let BuilderFinalReport {
       maybe_model_kb: last_buffer,
       serde: bm_serde,
-      model_loads: bm_loads,
     } = bm_builder.finalize()?;
     let model_kb_8 = assert_some_buffer(last_buffer);
-    assert_eq!(bm_loads, vec![40]);
+    let max_load: Vec<usize> = bm_serde.get_load().iter().map(|load| load.max()).collect();
+    assert_eq!(max_load, vec![915]);
 
     // check buffers
     test_same_model_box(
@@ -598,10 +594,10 @@ mod tests {
     let BuilderFinalReport {
       maybe_model_kb: last_buffer,
       serde: bm_serde,
-      model_loads: bm_loads,
     } = bm_builder.finalize()?;
     let model_kb_8 = assert_some_buffer(last_buffer);
-    assert_eq!(bm_loads, vec![1500]);
+    let max_load: Vec<usize> = bm_serde.get_load().iter().map(|load| load.max()).collect();
+    assert_eq!(max_load, vec![917]);
 
     // check buffers
     test_same_model_box(

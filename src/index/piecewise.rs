@@ -86,7 +86,6 @@ impl PiecewiseIndex {
     let BuilderFinalReport {
       maybe_model_kb,
       serde: model_serde,
-      model_loads: _,
     } = model_builder.finalize()?;
     if let Some(model_kb) = maybe_model_kb {
         data_writer.write(&model_kb)?;

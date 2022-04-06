@@ -6,6 +6,7 @@ use std::io;
 use crate::common::error::GResult;
 use crate::meta::Context;
 use crate::model::BuilderFinalReport;
+use crate::model::LoadDistribution;
 use crate::model::MaybeKeyBuffer;
 use crate::model::Model;
 use crate::model::ModelBuilder;
@@ -128,6 +129,13 @@ impl ModelRecon for DoubleLinearModelRecon {
       },
     };
     Ok(Box::new(model))
+  }
+
+  fn get_load(&self) -> Vec<LoadDistribution> {
+    match self.max_load {
+      Some(max_load) => LoadDistribution::exacts(vec![max_load]),
+      None => vec![],
+    }
   }
 }
 
@@ -322,7 +330,6 @@ impl ModelBuilder for DoubleLinearGreedyCorridorBuilder {
     Ok(BuilderFinalReport {
       maybe_model_kb: maybe_last_kb,
       serde: Box::new(self.serde),
-      model_loads: vec![self.max_length + (2 * self.max_error)],
     })
   }
 }
@@ -451,10 +458,10 @@ mod tests {
     let BuilderFinalReport {
       maybe_model_kb: last_buffer,
       serde: dlm_serde,
-      model_loads: dlm_loads,
     } = dlm_builder.finalize()?;
     let model_kb_8 = assert_some_buffer(last_buffer);
-    assert_eq!(dlm_loads, vec![915]);
+    let max_load: Vec<usize> = dlm_serde.get_load().iter().map(|load| load.max()).collect();
+    assert_eq!(max_load, vec![915]);
 
     // check buffers
     test_same_model(&dlm_serde.reconstruct(&model_kb_2[..])?, &Box::new(DoubleLinearModel {
@@ -509,10 +516,10 @@ mod tests {
     let BuilderFinalReport {
       maybe_model_kb: last_buffer,
       serde: dlm_serde,
-      model_loads: dlm_loads,
     } = dlm_builder.finalize()?;
     let model_kb_8 = assert_some_buffer(last_buffer);
-    assert_eq!(dlm_loads, vec![1115]);
+    let max_load: Vec<usize> = dlm_serde.get_load().iter().map(|load| load.max()).collect();
+    assert_eq!(max_load, vec![1115]);
 
     // check buffers
     test_same_model(&dlm_serde.reconstruct(&model_kb_6[..])?, &Box::new(DoubleLinearModel {
