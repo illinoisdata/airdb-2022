@@ -49,10 +49,10 @@ for ((i = 0; i < ${#SOSD_BLOBS[@]}; i++)) do
     sosd_size=${sosd_blob[1]}
     sosd_dtype=${sosd_blob[2]}
     blob_path="${BLOB_ROOT}/${sosd_blob[0]}_${sosd_blob[1]}M_${sosd_blob[2]}"
-    keyset_path="${KEYSET_ROOT}/${sosd_blob[0]}_${sosd_blob[1]}M_${sosd_blob[2]}_ks_${j} --seed ${j}"
+    keyset_path="${KEYSET_ROOT}/${sosd_blob[0]}_${sosd_blob[1]}M_${sosd_blob[2]}_ks_${j}"
 
     set -x
-    ./target/release/sosd_keyset --sosd-dtype ${sosd_dtype} --sosd-blob-path ${blob_path} --sosd-size ${sosd_size} --keyset-path ${keyset_path} --num-keyset ${NUM_KEYSET}
+    ./target/release/sosd_keyset --sosd-dtype ${sosd_dtype} --sosd-blob-path ${blob_path} --sosd-size ${sosd_size} --keyset-path ${keyset_path} --num-keyset ${NUM_KEYSET} --sosd-seed ${j}
     set +x
   done
 done
