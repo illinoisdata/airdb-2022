@@ -29,6 +29,7 @@ pub struct KeyRank {
 
 /* DB that manages key and compute their ranks */
 
+#[derive(Debug)]
 pub struct SOSDRankDB {
   array_store: ArrayStore,
   index: Option<Box<dyn Index>>,

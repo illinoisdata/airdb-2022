@@ -10,14 +10,16 @@ pub struct LoadDistribution {
 
 impl std::fmt::Debug for LoadDistribution {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    f.debug_struct("LoadDistribution")
-      .field("total_counts", &self.total_counts)
+    f.debug_struct("LD")
+      // .field("total_counts", &self.total_counts)
+      // .field("p25", &self.percentile(25.0))
       .field("p50", &self.percentile(50.0))
+      // .field("p75", &self.percentile(75.0))
       .field("p90", &self.percentile(90.0))
-      .field("p99", &self.percentile(99.0))
+      // .field("p99", &self.percentile(99.0))
       .field("max", &self.max())
       .field("average", &self.average())
-      .field("histogram", &self.load_counts)
+      // .field("histogram", &format!("{:?}", &self.load_counts))
       .finish()
   }
 }

@@ -19,41 +19,41 @@ pub struct KeyPosition {
 
 #[derive(PartialEq, Debug)]
 pub struct KPDirection {
-  pub x: i64,
-  pub y: i64,
+  pub x: i128,
+  pub y: i128,
 }
 
 impl KPDirection {
   pub fn from_pair(kp_1: &KeyPosition, kp_2: &KeyPosition) -> KPDirection {
     KPDirection {
-      x: kp_2.key as i64 - kp_1.key as i64,
-      y: kp_2.position as i64 - kp_1.position as i64,
+      x: kp_2.key as i128 - kp_1.key as i128,
+      y: kp_2.position as i128 - kp_1.position as i128,
     }
   }
 
   pub fn from_kp(kp: &KeyPosition) -> KPDirection {
     KPDirection {
-      x: kp.key as i64,
-      y: kp.position as i64,
+      x: kp.key as i128,
+      y: kp.position as i128,
     }
   }
 
   pub fn subtract_y(mut self, position: PositionT) -> KPDirection {
-    self.y -= position as i64;
+    self.y -= position as i128;
     self
   }
 
   pub fn is_lower_than(&self, other: &KPDirection) -> bool {
     // need to square the calculation space to multiple
-    self.y as i128 * (other.x as i128) < self.x as i128 * other.y as i128
+    self.y * other.x < self.x * other.y
   }
 
-  pub fn interpolate_with(&self, other: &KPDirection, key: &KeyT) -> i64 {
+  pub fn interpolate_with(&self, other: &KPDirection, key: &KeyT) -> i128 {
     if self.x == other.x {
       self.y
     } else {
       // need to square the calculation space to multiple
-      self.y + ((*key as i64 - self.x) as i128 * (other.y - self.y) as i128 / (other.x - self.x) as i128) as i64
+      self.y + (((*key as i128 - self.x) * (other.y - self.y)) / (other.x - self.x))
     }
   }
 }

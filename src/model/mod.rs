@@ -68,18 +68,28 @@ pub trait ModelBuilder: Debug + Sync {
 /* Model Drafter */
 // prefer this if the resulting model is not large
 
-#[derive(Debug)]
 pub struct ModelDraft {
   pub key_buffers: Vec<KeyBuffer>,
   pub serde: Box<dyn ModelRecon>,
-  pub loads: Vec<usize>,
   pub cost: Duration,
 }
 
+impl std::fmt::Debug for ModelDraft {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("ModelDraft")
+      .field("num_kb", &self.key_buffers.len())
+      .field("serde", &self.serde)
+      .field("cost", &self.cost)
+      .finish()
+  }
+}
+
 unsafe impl Send for ModelDraft {}
+unsafe impl Sync for ModelDraft {}
 
 pub trait ModelDrafter: Sync + Debug {
   fn draft(&self, kps: &KeyPositionCollection, profile: &dyn StorageProfile) -> GResult<ModelDraft>;
+  fn draft_many(&self, kps: &KeyPositionCollection, profile: &dyn StorageProfile) -> Vec<ModelDraft>;
 }
 
 

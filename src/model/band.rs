@@ -77,7 +77,7 @@ impl DoubleBandModel {
   fn update(&mut self, kp: &KeyPosition) {
     // shift kps down every update?
     let predict_offset = self.kp_1.interpolate_with(&self.kp_2, &kp.key);
-    let deviation = kp.position as i64 - predict_offset;
+    let deviation = kp.position as i64 - predict_offset as i64;
     if deviation > 0 {
       // underestimate
       self.width_under = std::cmp::max(self.width_under, deviation as PositionT);
@@ -94,6 +94,10 @@ impl DoubleBandModel {
       kp_2: self.kp_2.subtract_y(self.width_over),
       width: self.width_under + self.width_over,
     }
+  }
+
+  fn width(&self) -> PositionT {
+    self.width_under + self.width_over
   }
 }
 
@@ -171,6 +175,71 @@ fn pick_one_band_from(lower_kps: &[KeyPosition], upper_kps: &[KeyPosition]) -> O
   }
 }
 
+// create band line (from endpoints in lower_kps) and test its width on covered points (point_kps)
+fn pick_best_band_from(lower_kps: &[KeyPosition], upper_kps: &[KeyPosition]) -> Option<BandModel> {
+  if lower_kps.is_empty() || upper_kps.is_empty() {
+    None
+  } else {
+    let mut best_double_band: Option<DoubleBandModel> = None;
+
+    // try create from lower
+    for idx in 0 .. lower_kps.len() - 1 {
+      let mut double_band = DoubleBandModel::new(&lower_kps[idx], &lower_kps[idx + 1]);
+      let kpd = KPDirection::from_pair(&lower_kps[idx], &lower_kps[idx + 1]);
+      let upper_crit_idx = find_critical_upper(&kpd, upper_kps);
+      assert!(upper_crit_idx == 0 || kpd.is_lower_than(&KPDirection::from_pair(&upper_kps[upper_crit_idx - 1], &upper_kps[upper_crit_idx])), "{:?}, {:?}", kpd, upper_kps);
+      assert!(upper_crit_idx == upper_kps.len() - 1 || !kpd.is_lower_than(&KPDirection::from_pair(&upper_kps[upper_crit_idx], &upper_kps[upper_crit_idx + 1])), "{:?}, {:?}", kpd, upper_kps);
+      double_band.update(&lower_kps[idx]);
+      double_band.update(&upper_kps[upper_crit_idx]);
+      if idx < lower_kps.len() - 1 {
+        double_band.update(&lower_kps[idx + 1]);
+      }
+      if upper_crit_idx < upper_kps.len() - 1 {
+        double_band.update(&upper_kps[upper_crit_idx + 1]);
+      }
+
+      // pick best
+      best_double_band = match best_double_band {
+        Some(best_db) => if best_db.width() <= double_band.width() {
+          Some(best_db)
+        } else {
+          Some(double_band)
+        },
+        None => Some(double_band),
+      };
+    }
+
+    // try create from upper
+    for idx in 0 .. upper_kps.len() - 1 {
+      let mut double_band = DoubleBandModel::new(&upper_kps[idx], &upper_kps[idx + 1]);
+      let kpd = KPDirection::from_pair(&upper_kps[idx], &upper_kps[idx + 1]);
+      let lower_crit_idx = find_critical_lower(&kpd, lower_kps);
+      assert!(lower_crit_idx == 0 || KPDirection::from_pair(&lower_kps[lower_crit_idx - 1], &lower_kps[lower_crit_idx]).is_lower_than(&kpd), "{:?}, {:?}", kpd, lower_kps);
+      assert!(lower_crit_idx == lower_kps.len() - 1 || !KPDirection::from_pair(&lower_kps[lower_crit_idx], &lower_kps[lower_crit_idx + 1]).is_lower_than(&kpd), "{:?}, {:?}", kpd, lower_kps);
+      double_band.update(&lower_kps[lower_crit_idx]);
+      double_band.update(&upper_kps[idx]);
+      if lower_crit_idx < lower_kps.len() - 1 {
+        double_band.update(&lower_kps[lower_crit_idx + 1]);
+      }
+      if idx < upper_kps.len() - 1 {
+        double_band.update(&upper_kps[idx + 1]);
+      }
+
+      // pick best
+      best_double_band = match best_double_band {
+        Some(best_db) => if best_db.width() <= double_band.width() {
+          Some(best_db)
+        } else {
+          Some(double_band)
+        },
+        None => Some(double_band),
+      };
+    }
+
+    best_double_band.map(|db| db.into_band())
+  }
+}
+
 #[derive(Debug)]
 struct ConvexHull {
   lower_kps: Vec<KeyPosition>,  // convex lower curve
@@ -185,15 +254,31 @@ impl ConvexHull {
     }
   }
 
+  pub fn is_empty(&self) -> bool {
+    self.lower_kps.is_empty() && self.upper_kps.is_empty()
+  }
+
   // create linear model 
   pub fn make_band(&self) -> Option<AnchoredBand> {
+    assert_eq!(self.lower_kps[0], self.upper_kps[0], "Convex hull should align on its left end");
     pick_one_band_from(&self.lower_kps, &self.upper_kps).map(|band| AnchoredBand { 
       band,
-      anchor_key: {
-        assert_eq!(self.lower_kps[0], self.upper_kps[0], "Convex hull should align on its left end");
-        self.lower_kps[0].key
-      },
+      anchor_key: self.lower_kps[0].key,
     })
+  }
+
+  // create linear model 
+  pub fn make_best_band(&self) -> Option<AnchoredBand> {
+    assert_eq!(self.lower_kps[0], self.upper_kps[0], "Convex hull should align on its left end");
+    pick_best_band_from(&self.lower_kps, &self.upper_kps).map(|band| AnchoredBand { 
+      band,
+      anchor_key: self.lower_kps[0].key,
+    })
+  }
+
+  pub fn lowest_offset(&self) -> PositionT {
+    assert_eq!(self.lower_kps.first(), self.upper_kps.first(), "Convex hull should align on its left end");
+    self.lower_kps.first().unwrap().position
   }
 
   fn push_right_lower(&mut self, kp: KeyPosition) {
@@ -248,10 +333,10 @@ impl BandModelRecon {
 
     // turn the model into a buffer
     let mut model_buffer = vec![];
-    model_buffer.write_i64::<BigEndian>(bm.kp_1.x)?;
-    model_buffer.write_i64::<BigEndian>(bm.kp_1.y)?;
-    model_buffer.write_i64::<BigEndian>(bm.kp_2.x)?;
-    model_buffer.write_i64::<BigEndian>(bm.kp_2.y)?;
+    model_buffer.write_u64::<BigEndian>(bm.kp_1.x.try_into().unwrap())?;
+    model_buffer.write_i64::<BigEndian>(bm.kp_1.y.try_into().unwrap())?;
+    model_buffer.write_u64::<BigEndian>(bm.kp_2.x.try_into().unwrap())?;
+    model_buffer.write_i64::<BigEndian>(bm.kp_2.y.try_into().unwrap())?;
     model_buffer.write_uint::<BigEndian>(bm.width as u64, POSITION_LENGTH)?;
     Ok(model_buffer)  // expect 5 * 8 = 40 bytes
   }
@@ -260,12 +345,12 @@ impl BandModelRecon {
     let mut model_buffer = io::Cursor::new(buffer);
     Ok(BandModel {
       kp_1: KPDirection {
-        x: model_buffer.read_i64::<BigEndian>()?,
-        y: model_buffer.read_i64::<BigEndian>()?,
+        x: model_buffer.read_u64::<BigEndian>()?.into(),
+        y: model_buffer.read_i64::<BigEndian>()?.into(),
       },
       kp_2: KPDirection {
-        x: model_buffer.read_i64::<BigEndian>()?,
-        y: model_buffer.read_i64::<BigEndian>()?,
+        x: model_buffer.read_u64::<BigEndian>()?.into(),
+        y: model_buffer.read_i64::<BigEndian>()?.into(),
       },
       width: model_buffer.read_uint::<BigEndian>(POSITION_LENGTH)? as PositionT,
     })
@@ -419,12 +504,105 @@ impl BandConvexHullGreedyBuilder {
 }
 
 
+/* Build with bounded offset range */
+
+pub struct BandConvexHullEqualBuilder {
+  max_range: PositionT,
+  serde: BandModelRecon,
+  hull: ConvexHull,
+  current_samples: usize,
+}
+
+impl std::fmt::Debug for BandConvexHullEqualBuilder {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("BandConvexHullEB")
+      .field("max_range", &self.max_range)
+      .finish()
+  }
+}
+
+impl BandConvexHullEqualBuilder {
+  pub fn new(max_range: PositionT) -> BandConvexHullEqualBuilder {
+    BandConvexHullEqualBuilder {
+      max_range,
+      serde: BandModelRecon::new(),
+      hull: ConvexHull::new(),
+      current_samples: 0,
+    }
+  }
+
+  fn push_to_hull(&mut self, kpr: &KeyPositionRange) {
+    self.hull.push_right_lower(KeyPosition { key: kpr.key_l, position: kpr.offset });
+    self.hull.push_right_lower(KeyPosition { key: kpr.key_r, position: kpr.offset });
+    self.hull.push_right_lower(KeyPosition { key: kpr.key_r, position: kpr.offset + kpr.length });
+    self.hull.push_right_upper(KeyPosition { key: kpr.key_l, position: kpr.offset });
+    self.hull.push_right_upper(KeyPosition { key: kpr.key_l, position: kpr.offset + kpr.length });
+    self.hull.push_right_upper(KeyPosition { key: kpr.key_r, position: kpr.offset + kpr.length });
+    self.current_samples += 1;
+  }
+
+  fn consume_produce_feasible(&mut self, kpr: &KeyPositionRange) -> Option<(AnchoredBand, usize)> {
+    // check whether adding next point is valid
+    if self.hull.is_empty() || kpr.offset + kpr.length - self.hull.lowest_offset() <= self.max_range {
+      // add this next point
+      self.push_to_hull(kpr);
+      None
+    } else {
+      let band = self.hull.make_best_band().unwrap();
+      let band_samples = self.current_samples;
+      self.hull = ConvexHull::new();
+      self.current_samples = 0;
+      self.push_to_hull(kpr);
+      Some((band, band_samples))
+    }
+  }
+
+  fn generate_segment(&mut self, band: AnchoredBand, num_samples: usize) -> GResult<MaybeKeyBuffer> {
+    let band_buffer = self.serde.sketch(&band.band, num_samples)?;
+    Ok(Some(KeyBuffer::new(band.anchor_key, band_buffer)))
+  }
+}
+
+impl ModelBuilder for BandConvexHullEqualBuilder {
+  fn consume(&mut self, kpr: &KeyPositionRange) -> GResult<MaybeKeyBuffer> {
+    if let Some((band, num_samples)) = self.consume_produce_feasible(kpr) {
+      self.generate_segment(band, num_samples)
+    } else {
+      Ok(None)
+    }
+  }
+
+  fn finalize(mut self: Box<Self>) -> GResult<BuilderFinalReport> {
+    // make last band if needed
+    let maybe_last_kb = if let Some(band) = self.hull.make_best_band() {
+      self.generate_segment(band, self.current_samples)?
+    } else {
+      None
+    };
+    Ok(BuilderFinalReport {
+      maybe_model_kb: maybe_last_kb,
+      serde: Box::new(self.serde),
+    })
+  }
+}
+
+impl BandConvexHullEqualBuilder {
+  fn drafter(max_range: usize) -> Box<dyn ModelDrafter> {
+    let bm_producer = Box::new(
+      move || {
+        Box::new(BandConvexHullEqualBuilder::new(max_range)) as Box<dyn ModelBuilder>
+      });
+    Box::new(BuilderAsDrafter::wrap(bm_producer))
+  }
+}
+
+
 /* Drafter */
 
 pub struct BandMultipleDrafter;
 
 impl BandMultipleDrafter {
-  pub fn exponentiation(low_load: PositionT, high_load: PositionT, exponent: f64) -> MultipleDrafter {
+  pub fn greedy_exponentiation(low_load: PositionT, high_load: PositionT, exponent: f64) -> MultipleDrafter {
     let mut bm_drafters = Vec::new();
     let mut current_load = low_load;
     while current_load < high_load {
@@ -432,6 +610,17 @@ impl BandMultipleDrafter {
       current_load = ((current_load as f64) * exponent) as PositionT;
     }
     bm_drafters.push(BandConvexHullGreedyBuilder::drafter(high_load));
+    MultipleDrafter::from(bm_drafters)
+  }
+
+  pub fn equal_exponentiation(low_load: PositionT, high_load: PositionT, exponent: f64) -> MultipleDrafter {
+    let mut bm_drafters = Vec::new();
+    let mut current_load = low_load;
+    while current_load < high_load {
+      bm_drafters.push(BandConvexHullEqualBuilder::drafter(current_load));
+      current_load = ((current_load as f64) * exponent) as PositionT;
+    }
+    bm_drafters.push(BandConvexHullEqualBuilder::drafter(high_load));
     MultipleDrafter::from(bm_drafters)
   }
 }

@@ -21,7 +21,7 @@ INDEX_TYPE=$4
 ACTION=$5
 REPEAT=$6
 RESET_SCRIPT=$7
-PROFILE="--affine-latency-ns 10000000 --affine-bandwidth-mbps 16.0"  # nfs
+PROFILE="--affine-latency-ns 30000000 --affine-bandwidth-mbps 0.5"  # nfs
 # PROFILE="--affine-latency-ns 108000000 --affine-bandwidth-mbps 104.0"  # nfs2
 # PROFILE="--affine-latency-ns 22000 --affine-bandwidth-mbps 2500.0"  # ssd
 # PROFILE="--affine-latency-ns 260000 --affine-bandwidth-mbps 204.0"  # local
@@ -75,12 +75,11 @@ benchmark () {
   sosd_size=${sosd_blob[1]}
   sosd_dtype=${sosd_blob[2]}
   blob_name="${sosd_blob[0]}_${sosd_blob[1]}M_${sosd_blob[2]}"
-  keyset_path="${KEYSET_ROOT}/${sosd_blob[0]}_${sosd_blob[1]}M_${sosd_blob[2]}_ks"
 
   for ((j = 0; j < ${REPEAT}; j++)) do
   bash ${RESET_SCRIPT}
   set -x
-  RUST_LOG=airindex=${LOG_LEVEL},sosd_experiment=${LOG_LEVEL} RUST_BACKTRACE=full target/release/sosd_experiment --db-url "${DB_ROOT}/${blob_name}_${INDEX_TYPE}" --index-type ${INDEX_TYPE} --out-path sosd_benchmark_out.jsons --dataset-name blob --sosd-blob-url "${BLOB_ROOT}/${blob_name}" --keyset-url "${KEYSET_ROOT}/${blob_name}_ks" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} ${PROFILE} --do-benchmark
+  RUST_LOG=airindex=${LOG_LEVEL},sosd_experiment=${LOG_LEVEL} RUST_BACKTRACE=full target/release/sosd_experiment --db-url "${DB_ROOT}/${blob_name}_${INDEX_TYPE}" --index-type ${INDEX_TYPE} --out-path sosd_benchmark_out.jsons --dataset-name blob --sosd-blob-url "${BLOB_ROOT}/${blob_name}" --keyset-url "${KEYSET_ROOT}/${blob_name}_ks_${j}" --sosd-dtype ${sosd_dtype} --sosd-size ${sosd_size} ${PROFILE} --do-benchmark
   set +x
   done
 }

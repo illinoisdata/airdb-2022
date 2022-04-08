@@ -65,13 +65,19 @@ impl ModelDrafter for MultipleDrafter {
       false => self.draft_ser(kps, profile),
     }.expect("No draft produced (possibly drafters list is empty?)");
     log::info!(
-      "Best drafted model: {:?}, {} submodels, loads= {:?}, cost= {:?}",
+      "Best drafted model: {:?}, {} submodels, cost= {:?}",
       best_draft.serde,
       best_draft.key_buffers.len(),
-      best_draft.loads,
       best_draft.cost,
     );
     Ok(best_draft)
+  }
+
+  fn draft_many(&self, kps: &KeyPositionCollection, profile: &dyn StorageProfile) -> Vec<ModelDraft> {
+    self.drafters.par_iter()
+      .map(|drafter| drafter.draft(kps, profile)
+          .unwrap_or_else(|_| panic!("Drafting failed at {:?}", drafter)))
+      .collect()
   }
 }
 
@@ -91,8 +97,6 @@ impl std::fmt::Debug for BuilderAsDrafter {
       .finish()
   }
 }
-
-unsafe impl Sync for ModelDraft {}
 
 impl BuilderAsDrafter {
   pub fn wrap(builder_producer: Box<BuilerProducer>) -> BuilderAsDrafter {
@@ -135,16 +139,20 @@ impl ModelDrafter for BuilderAsDrafter {
     let model_cost = profile.sequential_cost(&model_load_summary);
     let total_loads = [est_complexity_loads, model_load_summary].concat();
     let cost = profile.sequential_cost(&total_loads);
-    log::info!(
-      "{:?}: {} submodels, loads= {:?}, cost= {:?} (c/m: {:?}/{:?})",
+    log::trace!(
+      "{:?}: {} submodels, loads= {:?} with {:?}, cost= {:?} (c/m: {:?}/{:?})",
       self,
       key_buffers.len(),
       total_loads,
+      serde.get_load(),
       cost,
       complexity_cost,
       model_cost,
     );
-    log::debug!("{:?}", serde.get_load());
-    Ok(ModelDraft{ key_buffers, serde, loads: total_loads, cost })
+    Ok(ModelDraft{ key_buffers, serde, cost })
+  }
+
+  fn draft_many(&self, kps: &KeyPositionCollection, profile: &dyn StorageProfile) -> Vec<ModelDraft> {
+    vec!(self.draft(kps, profile).unwrap())
   }
 }

@@ -14,6 +14,7 @@ use airindex::db::key_rank::read_keyset;
 use airindex::db::key_rank::SOSDRankDB;
 use airindex::index::hierarchical::BalanceStackIndexBuilder;
 use airindex::index::hierarchical::BoundedTopStackIndexBuilder;
+use airindex::index::hierarchical::ExploreStackIndexBuilder;
 use airindex::index::Index;
 use airindex::index::IndexBuilder;
 use airindex::io::internal::ExternalStorage;
@@ -266,19 +267,20 @@ impl Experiment {
 
   fn make_drafter(&self, args: &Cli) -> Box<dyn ModelDrafter> {
     let model_drafter = match args.index_type.as_str() {
-      "dlst" => {
-        StepMultipleDrafter::exponentiation(64, 1_048_576, 2.0, 16)
-          .extend(DoubleLinearMultipleDrafter::exponentiation(64, 1_048_576, 2.0))
+      "dlst" | "enb-dlst" => {
+        StepMultipleDrafter::exponentiation(256, 1_048_576, 2.0, 16)
+          .extend(DoubleLinearMultipleDrafter::exponentiation(256, 1_048_576, 2.0))
       },
-      "st" => {
-        StepMultipleDrafter::exponentiation(64, 1_048_576, 2.0, 16)
+      "st" | "enb-st" => {
+        StepMultipleDrafter::exponentiation(256, 1_048_576, 2.0, 16)
       },
-      "stb" => {
-        StepMultipleDrafter::exponentiation(64, 1_048_576, 2.0, 16)
-          .extend(BandMultipleDrafter::exponentiation(64, 1_048_576, 2.0))
+      "stb" | "enb-stb" => {
+        StepMultipleDrafter::exponentiation(256, 1_048_576, 2.0, 16)
+          .extend(BandMultipleDrafter::greedy_exponentiation(256, 1_048_576, 2.0))
+          .extend(BandMultipleDrafter::equal_exponentiation(256, 1_048_576, 2.0))
       },
       "btree" => {
-        StepMultipleDrafter::exponentiation(4096, 4096, 1.5, 255)
+        StepMultipleDrafter::exponentiation(4096, 4096, 2.0, 255)
       },
       _ => panic!("Invalid sosd dtype \"{}\"", args.sosd_dtype),
     };
@@ -296,6 +298,14 @@ impl Experiment {
     match args.index_type.as_str() {
       "dlst" | "st" | "stb" => {
         Box::new(BalanceStackIndexBuilder::new(
+          self.db_context.storage.as_ref().unwrap(),
+          model_drafter,
+          profile,
+          self.db_context.store_prefix.as_ref().unwrap().clone(),
+        ))
+      },
+      "enb-dlst" | "enb-st" | "enb-stb" => {
+        Box::new(ExploreStackIndexBuilder::new(
           self.db_context.storage.as_ref().unwrap(),
           model_drafter,
           profile,
@@ -371,6 +381,7 @@ impl Experiment {
         count_milestone = (count_milestone as f64 * freq_mul).ceil() as usize;
       }
     }
+    log::info!("Benchmarked {:#?}", sosd_db);
     Ok((time_measures, query_counts))
   }
 

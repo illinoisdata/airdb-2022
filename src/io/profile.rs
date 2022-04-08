@@ -7,13 +7,6 @@ pub trait StorageProfile: Sync {
   fn sequential_cost(&self, read_sizes: &[usize]) -> Duration {
     read_sizes.iter().map(|read_size| self.cost(*read_size)).sum()
   }
-
-  // fn sequential_cost<I>(&self, read_sizes: I) -> f64
-  // where
-  //   I: Iterator<Item = usize>,
-  // {
-  //   read_sizes.map(|read_size| self.cost(read_size)).sum()
-  // }
 }
 
 

@@ -102,8 +102,14 @@ impl ArrayStore {
   fn read_page_range(&self, offset: PositionT, length: PositionT) -> GResult<(SharedByteView, usize)> {
     // calculate first and last "page" indexes
     let end_offset = offset + length;
-    let start_rank = offset / self.state.data_size + (offset % self.state.data_size != 0) as usize;
-    let end_rank = std::cmp::min(end_offset / self.state.data_size, self.state.length);
+    let start_rank = std::cmp::min(
+      offset / self.state.data_size + (offset % self.state.data_size != 0) as usize,
+      self.state.length - 1,
+    );
+    let end_rank = std::cmp::min(
+      end_offset / self.state.data_size + (end_offset % self.state.data_size != 0) as usize,
+      self.state.length,
+    );
 
     // make read requests
     let array_buffer = self.storage.borrow().read_range(

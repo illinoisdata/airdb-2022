@@ -441,6 +441,38 @@ impl Adaptor for AzureStorageAdaptor {
 }
 
 
+/* Dummy adaptor with no-op */
+
+#[derive(Default, Debug)]
+pub struct DummyAdaptor;
+
+impl Adaptor for DummyAdaptor {
+  fn read_all(&self, _url: &Url) -> GResult<SharedBytes> {
+    Ok(SharedBytes::from(Vec::new()))
+  }
+
+  fn read_range(&self, _url: &Url, _range: &Range) -> GResult<SharedBytes> {
+    Ok(SharedBytes::from(Vec::new()))
+  }
+
+  fn read_in_place(&self, _url: &Url, _range: &Range, _buffer: &mut [u8]) -> GResult<()> {
+    Ok(())
+  }
+
+  fn create(&self, _url: &Url) -> GResult<()> {
+    Ok(())
+  }
+
+  fn write_all(&self, _url: &Url, _buf: &[u8]) -> GResult<()> {
+    Ok(())
+  }
+
+  fn remove(&self, _url: &Url) -> GResult<()> {
+    Ok(())
+  }
+}
+
+
 #[cfg(test)]
 pub mod adaptor_test {
   use super::*;
