@@ -40,6 +40,7 @@ SOSD_BLOBS=(
   # "uniform_sparse 200 uint32"
   "uniform_sparse 200 uint64"
   "wiki_ts 200 uint64"
+  "gmm_k100 800 uint64"
 )
 
 mkdir -p ${KEYSET_ROOT}

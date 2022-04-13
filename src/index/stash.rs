@@ -36,7 +36,7 @@ impl Stash {
       let url = ctx.store_prefix.as_ref()
         .expect("Applying stash require store_prefix")
         .join(&self.path)?;
-      storage.borrow().warm_cache(&url, &self.buffer);
+      storage.borrow().warm_cache(&url, &self.buffer.slice_all());
     }
     Ok(())
   }

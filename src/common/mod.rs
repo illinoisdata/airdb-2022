@@ -74,6 +74,7 @@ impl From<Vec<u8>> for SharedBytes {
 
 /* Slice of one shared bytes */
 
+#[derive(Clone)]
 pub struct SharedByteSlice {
   buffer: Rc<Vec<u8>>,
   offset: usize,
@@ -87,6 +88,15 @@ impl SharedByteSlice {
 
   pub fn is_empty(&self) -> bool {
     self.length == 0
+  }
+
+  pub fn slice(&self, offset: usize, length: usize) -> SharedByteSlice {
+    assert!(offset + length <= self.length);
+    SharedByteSlice {
+      buffer: Rc::clone(&self.buffer),
+      offset: self.offset + offset,
+      length,
+    }
   }
 }
 
@@ -182,6 +192,12 @@ impl From<Vec<SharedByteSlice>> for SharedByteView {
 impl From<SharedBytes> for SharedByteView {
   fn from(buffer: SharedBytes) -> Self {
     SharedByteView::from(vec![buffer.slice_all()])
+  }
+}
+
+impl From<SharedByteSlice> for SharedByteView {
+  fn from(buffer: SharedByteSlice) -> Self {
+    SharedByteView::from(vec![buffer])
   }
 }
 

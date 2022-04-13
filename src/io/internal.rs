@@ -5,6 +5,7 @@ use std::rc::Rc;
 use url::Url;
 
 use crate::common::SharedBytes;
+use crate::common::SharedByteSlice;
 use crate::common::SharedByteView;
 use crate::common::error::ConflictingStorageScheme;
 use crate::common::error::GResult;
@@ -43,7 +44,7 @@ impl CacheKey {
 pub struct ExternalStorage {
   adaptors: HashMap<String, Rc<Box<dyn Adaptor>>>,
   schemes: Vec<String>,  // HACK: for error reporting
-  page_cache: RefCell<LruCache<CacheKey, SharedBytes>>,
+  page_cache: RefCell<LruCache<CacheKey, SharedByteSlice>>,
   page_size: usize,
   total_page: usize,
 }
@@ -110,26 +111,27 @@ impl ExternalStorage {
 
 impl ExternalStorage {
 
-  pub fn warm_cache(&self, url: &Url, url_buffer: &SharedBytes) {
+  pub fn warm_cache(&self, url: &Url, url_buffer: &SharedByteSlice) {
     self.warm_cache_at(url, url_buffer, 0);
     log::debug!("Warmed up cache for {:?}", url.to_string());
   }
 
-  pub fn warm_cache_at(&self, url: &Url, buffer: &SharedBytes, offset: usize) {
+  pub fn warm_cache_at(&self, url: &Url, buffer: &SharedByteSlice, offset: usize) {
     assert!(url.query().is_none());
     assert_eq!(offset % self.page_size, 0);
-    let buffer_range = Range { offset, length: buffer.len()};
+    let length = buffer.len();
+    let buffer_range = Range { offset, length };
     self.range_to_pages(&buffer_range)
       // .into_par_iter()
       .for_each(|page_idx| {
         let cache_key = CacheKey::new(url.clone(), page_idx);
         let page_range = self.page_to_range(page_idx);
         let offset_l = page_range.offset - offset;  // underflow if offset not align
-        let offset_r = std::cmp::min(buffer.len(), page_range.offset + page_range.length - offset);
-        let page_bytes = buffer[offset_l .. offset_r].to_vec();
+        let offset_r = std::cmp::min(length, page_range.offset + page_range.length - offset);
+        let page_bytes = buffer.slice(offset_l, offset_r - offset_l);
         self.page_cache.borrow_mut().put(
           cache_key,
-          SharedBytes::from(page_bytes),
+          page_bytes,
         );
       });
   }
@@ -166,7 +168,7 @@ impl ExternalStorage {
     !self.page_cache.borrow_mut().contains(cache_key)
   }
 
-  fn read_through_page(&self, cache_key: &CacheKey) -> GResult<SharedBytes> {
+  fn read_through_page(&self, cache_key: &CacheKey) -> GResult<SharedByteSlice> {
     // check in cache
     if let Some(cache_line) = self.page_cache.borrow_mut().get(cache_key) {
       // cache hit
@@ -181,8 +183,8 @@ impl ExternalStorage {
     }
   }
 
-  fn read_range_raw(&self, cache_key: &CacheKey, range: &Range) -> GResult<SharedBytes> {
-    self.select_adaptor(&cache_key.url)?.read_range(&cache_key.url, range)
+  fn read_range_raw(&self, cache_key: &CacheKey, range: &Range) -> GResult<SharedByteSlice> {
+    Ok(self.select_adaptor(&cache_key.url)?.read_range(&cache_key.url, range)?.slice_all())
   }
 
   fn range_to_pages(&self, range: &Range) -> std::ops::Range<usize> {

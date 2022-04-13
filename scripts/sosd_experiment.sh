@@ -21,10 +21,10 @@ INDEX_TYPE=$4
 ACTION=$5
 REPEAT=$6
 RESET_SCRIPT=$7
-PROFILE="--affine-latency-ns 30000000 --affine-bandwidth-mbps 0.5"  # nfs
+PROFILE="--affine-latency-ns 12000000 --affine-bandwidth-mbps 50.0"  # nfs
 # PROFILE="--affine-latency-ns 108000000 --affine-bandwidth-mbps 104.0"  # nfs2
 # PROFILE="--affine-latency-ns 22000 --affine-bandwidth-mbps 2500.0"  # ssd
-# PROFILE="--affine-latency-ns 260000 --affine-bandwidth-mbps 204.0"  # local
+# PROFILE="--affine-latency-ns 220000 --affine-bandwidth-mbps 200.0"  # local
 LOG_LEVEL="info"
 # LOG_LEVEL="debug"
 # LOG_LEVEL="trace"
@@ -56,6 +56,7 @@ SOSD_BLOBS=(
   # "uniform_sparse 200 uint32"
   # "uniform_sparse 200 uint64"
   "wiki_ts 200 uint64"
+  "gmm_k100 800 uint64"
 )
 
 build () {
