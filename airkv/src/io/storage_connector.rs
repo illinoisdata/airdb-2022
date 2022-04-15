@@ -1,9 +1,18 @@
 use url::Url;
 
-use crate::common::error::GResult;
+use crate::{
+    common::error::GResult,
+    storage::{data_entry::AppendRes, segment::{SegSize, SegmentProps}},
+};
 use std::collections::HashMap;
 
 use super::file_utils::Range;
+
+pub enum StorageType {
+    LocalFakeStore,
+    RemoteFakeStore,
+    AzureStore,
+}
 
 pub trait StorageConnector {
     // open connection
@@ -22,11 +31,17 @@ pub trait StorageConnector {
     // get the current length of the target segment
     fn get_size(&self, path: &Url) -> GResult<u64>;
 
+    // get common properties of the target segment
+    fn get_props(&self, path: &Url) -> GResult<SegmentProps>;
+
+    // seal the target segment(change its access permission as read-only)
+    fn seal(&self, path: &Url) -> GResult<()>;
+
     // create empty segment at a target path
     fn create(&self, path: &Url) -> GResult<()>;
 
     // append the byte array to the end of a target segment
-    fn append(&self, path: &Url, buf: &[u8]) -> GResult<()>;
+    fn append(&self, path: &Url, buf: &[u8]) -> AppendRes<SegSize>;
 
     // write whole byte array to a segment
     fn write_all(&self, path: &Url, buf: &[u8]) -> GResult<()>;

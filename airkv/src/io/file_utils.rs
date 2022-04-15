@@ -1,5 +1,5 @@
 use std::{
-    fs::{File, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::Path,
 };
@@ -71,6 +71,17 @@ impl FileUtil {
         Ok(Path::new(path.path()).exists())
     }
 
+    pub fn seal_file(path: &Url) -> GResult<()> {
+        let mut perms = OpenOptions::new()
+            .read(true)
+            .open(path.path())?
+            .metadata()?
+            .permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(path.path(), perms)?;
+        Ok(())
+    }
+
     pub fn file_size(path: &Url) -> GResult<u64> {
         let f = OpenOptions::new().read(true).open(path.path()).unwrap();
         Ok(f.metadata()?.len())
@@ -90,7 +101,7 @@ impl FileUtil {
     }
 
     pub fn read_range_from_path(path: &Url, range: &Range) -> GResult<Vec<u8>> {
-        let f = OpenOptions::new().read(true).open(path.path()).unwrap();
+        let f = OpenOptions::new().read(true).open(path.path())?;
         FileUtil::read_range_from_file(f, range)
     }
 

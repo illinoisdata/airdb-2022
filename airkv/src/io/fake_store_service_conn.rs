@@ -1,12 +1,17 @@
 use self::fakestore_service_connector::{
     fake_store_service_client::FakeStoreServiceClient, AppendRequest, CreateRequest,
-    GetSizeRequest, ReadAllRequest, ReadRangeRequest, RemoveRequest, WriteAllRequest,
+    GetPropsRequest, GetSizeRequest, ReadAllRequest, ReadRangeRequest, RemoveRequest, SealRequest,
+    WriteAllRequest,
 };
 use super::{file_utils::Range, storage_connector::StorageConnector};
 use crate::{
     common::error::{GResult, GenericError, UnknownServerError},
+    storage::{
+        data_entry::AppendRes,
+        segment::{BlockNum, SegSize, SegmentProps},
+    },
 };
-use std::{collections::HashMap, cell::RefCell};
+use std::{cell::RefCell, collections::HashMap};
 use tokio::runtime::Runtime;
 use tonic::transport::Channel;
 use url::Url;
@@ -36,7 +41,6 @@ impl Default for FakeStoreServiceConnector {
         Self {
             client: None,
             rt: Runtime::new().expect("Failed to initialize tokio runtime"),
-
         }
     }
 }
@@ -87,18 +91,22 @@ impl FakeStoreServiceConnector {
         }
     }
 
-    async fn append_async(client: &mut ClientType, path: &Url, buf: &[u8]) -> GResult<()> {
+    async fn append_async(client: &mut ClientType, path: &Url, buf: &[u8]) -> AppendRes<SegSize> {
         let append_request = tonic::Request::new(AppendRequest {
             path: path.to_string(),
             content: buf.to_vec(),
         });
-        let append_response = client.append(append_request).await?;
-        if append_response.into_inner().status {
-            Ok(())
-        } else {
-            Err(Box::new(UnknownServerError::new(
-                "unexpected response from server for append()".to_owned(),
-            )) as GenericError)
+        let append_response = client.append(append_request).await;
+        match append_response {
+            Ok(res) => {
+                let append_res = res.into_inner();
+                let status = append_res.status;
+                let block_num = Some(append_res.blocknum as BlockNum);
+                AppendRes::<SegSize>::append_res_from_code(status, block_num)
+            }
+            Err(err) => {
+                panic!("append request encounters error: {}", err)
+            }
         }
     }
 
@@ -130,6 +138,32 @@ impl FakeStoreServiceConnector {
             )) as GenericError)
         }
     }
+
+    async fn seal_async(client: &mut ClientType, path: &Url) -> GResult<()> {
+        let seal_request = tonic::Request::new(SealRequest {
+            path: path.to_string(),
+        });
+        let seal_response = client.seal(seal_request).await?;
+        if seal_response.into_inner().status {
+            Ok(())
+        } else {
+            Err(Box::new(UnknownServerError::new(
+                "unexpected response from server for remove()".to_owned(),
+            )) as GenericError)
+        }
+    }
+
+    async fn get_props_async(client: &mut ClientType, path: &Url) -> GResult<SegmentProps> {
+        let get_props_request = tonic::Request::new(GetPropsRequest {
+            path: path.to_string(),
+        });
+        let get_props_response = client.get_props(get_props_request).await?.into_inner();
+        Ok(SegmentProps::new(
+            get_props_response.seglen,
+            get_props_response.blocknum as BlockNum,
+            get_props_response.sealed,
+        ))
+    }
 }
 
 impl StorageConnector for FakeStoreServiceConnector {
@@ -145,55 +179,22 @@ impl StorageConnector for FakeStoreServiceConnector {
             // TODO: get connection url from props
             let channel = Channel::from_static("http://[::1]:50051").connect().await?;
             self.client = Some(RefCell::new(FakeStoreServiceClient::new(channel)));
-            // // TODO: support real path parameter
-            // let fake_path = "fake_path".to_owned();
-            // let fake_props: Vec<Prop> = vec![];
-            // let open_request = tonic::Request::new(OpenRequest {
-            //     path: fake_path,
-            //     props: fake_props,
-            // });
-            // // let create_response = self.client.as_mut().unwrap().open(open_request).await?;
-            // // let create_response =  match self.client {
-            // //     Some(client) => client.get_mut().open(open_request).await?,
-            // //     None => panic!("The Client is None"),
-            // // };
-            // // if create_response.into_inner().status {
-                Ok(())
-            // } else {
-            //     Err(Box::new(UnknownServerError::new(
-            //         "unexpected response from server for open()".to_owned(),
-            //     )) as GenericError)
-            // }
+            Ok(())
         })
     }
 
     fn close(&mut self) -> GResult<()> {
         self.rt.block_on(async {
-            // // TODO: support real path parameter
-            // let fake_path = "fake_path".to_owned();
-            // let close_request = tonic::Request::new(CloseRequest { path: fake_path });
-            // // let close_response = self.client.as_mut().unwrap().close(close_request).await?;
-            // let close_response =  match self.client {
-            //     Some(client) => client.get_mut().close(close_request).await?,
-            //     None => panic!("The Client is None"),
-            // };
-
-            // if close_response.into_inner().status {
-            //     //TODO: close the client?
-                Ok(())
-            // } else {
-            //     Err(Box::new(UnknownServerError::new(
-            //         "unexpected response from server for close()".to_owned(),
-            //     )) as GenericError)
-            // }
+            Ok(())
         })
     }
 
     fn read_all(&self, path: &Url) -> GResult<Vec<u8>> {
         match self.client {
-            Some(ref client) => self
-                .rt
-                .block_on(FakeStoreServiceConnector::read_all_async(&mut client.borrow_mut(), path)),
+            Some(ref client) => self.rt.block_on(FakeStoreServiceConnector::read_all_async(
+                &mut client.borrow_mut(),
+                path,
+            )),
             None => panic!("The Client is None"),
         }
     }
@@ -203,7 +204,9 @@ impl StorageConnector for FakeStoreServiceConnector {
             Some(ref client) => self
                 .rt
                 .block_on(FakeStoreServiceConnector::read_range_async(
-                    &mut client.borrow_mut(), path, range,
+                    &mut client.borrow_mut(),
+                    path,
+                    range,
                 )),
             None => panic!("The Client is None"),
         }
@@ -211,27 +214,31 @@ impl StorageConnector for FakeStoreServiceConnector {
 
     fn get_size(&self, path: &Url) -> GResult<u64> {
         match self.client {
-            Some(ref client) => self
-                .rt
-                .block_on(FakeStoreServiceConnector::get_size_async(&mut client.borrow_mut(), path)),
+            Some(ref client) => self.rt.block_on(FakeStoreServiceConnector::get_size_async(
+                &mut client.borrow_mut(),
+                path,
+            )),
             None => panic!("The Client is None"),
         }
     }
 
     fn create(&self, path: &Url) -> GResult<()> {
         match self.client {
-            Some(ref client) => self
-                .rt
-                .block_on(FakeStoreServiceConnector::create_async(&mut client.borrow_mut(), path)),
+            Some(ref client) => self.rt.block_on(FakeStoreServiceConnector::create_async(
+                &mut client.borrow_mut(),
+                path,
+            )),
             None => panic!("The Client is None"),
         }
     }
 
-    fn append(&self, path: &Url, buf: &[u8]) -> GResult<()> {
+    fn append(&self, path: &Url, buf: &[u8]) -> AppendRes<SegSize> {
         match self.client {
-            Some(ref client) => self
-                .rt
-                .block_on(FakeStoreServiceConnector::append_async(&mut client.borrow_mut(), path, buf)),
+            Some(ref client) => self.rt.block_on(FakeStoreServiceConnector::append_async(
+                &mut client.borrow_mut(),
+                path,
+                buf,
+            )),
             None => panic!("The Client is None"),
         }
     }
@@ -239,7 +246,9 @@ impl StorageConnector for FakeStoreServiceConnector {
     fn write_all(&self, path: &Url, buf: &[u8]) -> GResult<()> {
         match self.client {
             Some(ref client) => self.rt.block_on(FakeStoreServiceConnector::write_all_async(
-                &mut client.borrow_mut(), path, buf,
+                &mut client.borrow_mut(),
+                path,
+                buf,
             )),
             None => panic!("The Client is None"),
         }
@@ -247,9 +256,30 @@ impl StorageConnector for FakeStoreServiceConnector {
 
     fn remove(&self, path: &Url) -> GResult<()> {
         match self.client {
-            Some(ref client) => self
-                .rt
-                .block_on(FakeStoreServiceConnector::remove_async(&mut client.borrow_mut(), path)),
+            Some(ref client) => self.rt.block_on(FakeStoreServiceConnector::remove_async(
+                &mut client.borrow_mut(),
+                path,
+            )),
+            None => panic!("The Client is None"),
+        }
+    }
+
+    fn seal(&self, path: &Url) -> GResult<()> {
+        match self.client {
+            Some(ref client) => self.rt.block_on(FakeStoreServiceConnector::seal_async(
+                &mut client.borrow_mut(),
+                path,
+            )),
+            None => panic!("The Client is None"),
+        }
+    }
+
+    fn get_props(&self, path: &Url) -> GResult<SegmentProps> {
+        match self.client {
+            Some(ref client) => self.rt.block_on(FakeStoreServiceConnector::get_props_async(
+                &mut client.borrow_mut(),
+                path,
+            )),
             None => panic!("The Client is None"),
         }
     }
@@ -258,19 +288,23 @@ impl StorageConnector for FakeStoreServiceConnector {
 #[cfg(test)]
 mod tests {
     use core::time;
-    use std::{collections::HashMap, thread};
+    use std::{
+        collections::HashMap,
+        thread::{self, JoinHandle},
+    };
 
     use rand::Rng;
     use tempfile::TempDir;
     use url::Url;
 
     use crate::{
-        common::error::GResult,
+        common::error::{AppendError, GResult},
         io::{
             fake_store_service_conn::FakeStoreServiceConnector,
             file_utils::{FileUtil, Range, UrlUtil},
             storage_connector::StorageConnector,
         },
+        storage::data_entry::AppendRes,
     };
 
     #[test]
@@ -287,6 +321,18 @@ mod tests {
         println!("create success");
         assert!(FileUtil::exist(test_url)?);
         assert_eq!(first_conn.get_size(test_url)?, 0);
+        first_conn.seal(test_url)?;
+        println!("seal success");
+        let content =
+            "The first sentence in a paragraph is sometimes called the key or topic sentence \
+    because it gives us the key to what the paragraph will be about.";
+        let buf = String::from(content).into_bytes();
+        let res = first_conn.append(test_url, &buf);
+        assert!(!res.is_success());
+        match res {
+            AppendRes::AppendToSealedFailure => {},
+            _ => panic!("unexpected append response"),
+        }
         first_conn.remove(test_url)?;
         assert!(!FileUtil::exist(test_url)?);
         Ok(())
@@ -409,14 +455,21 @@ mod tests {
         first_conn.open(fake_props)?;
         let temp_dir = TempDir::new()?;
         let test_url = &(UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?);
+        first_conn.create(test_url)?;
 
         let content =
             "The first sentence in a paragraph is sometimes called the key or topic sentence \
         because it gives us the key to what the paragraph will be about.";
         let buf = String::from(content).into_bytes();
-        first_conn.append(test_url, &buf)?;
-        first_conn.append(test_url, &buf)?;
-        first_conn.append(test_url, &buf)?;
+        let res = first_conn.append(test_url, &buf);
+        assert!(res.is_success());
+        let res1 = first_conn.append(test_url, &buf);
+        assert!(res1.is_success());
+        let res2 = first_conn.append(test_url, &buf);
+        assert!(res2.is_success());
+        let res3 = first_conn.seal(test_url);
+        assert!(res3.is_ok());
+
         // sleep to wait the concumer thread to flush data to the disk
         let sleep_period = time::Duration::from_secs(3);
         thread::sleep(sleep_period);
@@ -440,31 +493,43 @@ mod tests {
         because it gives us the key to what the paragraph will be about.";
         let buf = String::from(content).into_bytes();
 
+        //create segment
+        let mut read_conn = FakeStoreServiceConnector::default();
+        let fake_props: &HashMap<String, String> = &HashMap::new();
+        read_conn.open(fake_props)?;
+        read_conn.create(test_url)?;
+
         let append_closure = &(|p: Url, b: Vec<u8>| -> GResult<()> {
             let mut first_conn: FakeStoreServiceConnector = FakeStoreServiceConnector::default();
             let fake_props: &HashMap<String, String> = &HashMap::new();
             first_conn.open(fake_props)?;
-            first_conn.append(&p, &b)?;
-            Ok(())
+            match first_conn.append(&p, &b) {
+                AppendRes::Success(_) => Ok(()),
+                default => Err(Box::new(AppendError::new(format!(
+                    "append error: {}",
+                    default
+                )))),
+            }
         });
 
+        let mut clients: Vec<JoinHandle<_>> = vec![];
         //launch three threads to append data simultaneously
         //each thread simulates a client
         for _i in 1..=3 {
             let p_c = test_url.clone();
             let b_c = buf.clone();
-            thread::spawn(move || append_closure(p_c, b_c));
+            let handle = thread::spawn(move || append_closure(p_c, b_c));
+            clients.push(handle);
         }
 
-        // sleep to wait the concumer thread to flush data to the disk
-        let sleep_period = time::Duration::from_secs(3);
-        thread::sleep(sleep_period);
+        clients.into_iter().for_each(|h| {
+            h.join().expect("join failure");
+        });
 
         // check correctness
-        let mut read_conn = FakeStoreServiceConnector::default();
-        let fake_props: &HashMap<String, String> = &HashMap::new();
-        read_conn.open(fake_props)?;
         let res_buf = read_conn.read_all(test_url)?;
+        let seal_res = read_conn.seal(test_url);
+        assert!(seal_res.is_ok());
 
         let mut expect_buf = buf.clone();
         expect_buf.extend(&buf);

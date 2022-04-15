@@ -25,6 +25,22 @@ impl Error for UnknownServerError {}
 unsafe impl Send for UnknownServerError {}
 unsafe impl Sync for UnknownServerError {}
 
+
+#[derive(Display, Debug, Clone)]
+pub struct AppendError {
+    msg: String,
+}
+
+impl AppendError {
+    pub fn new(new_msg: String) -> Self {
+        Self { msg: new_msg }
+    }
+}
+impl Error for AppendError{}
+unsafe impl Send for AppendError{}
+unsafe impl Sync for AppendError{}
+
+
 pub struct ResultUtil;
 
 impl ResultUtil {

@@ -1,17 +1,37 @@
-use crate::{lsmt::{tree_delta::TreeDelta, level_seg_desc::LsmTreeDesc}, consistancy::airlock::AirLockRequest, common::error::GResult};
+use crate::{
+    common::error::GResult,
+    consistency::airlock::{AirLockCheck, AirLockID, AirLockRequest, AirLockStatus, CommitInfo},
+    io::storage_connector::StorageConnector,
+    lsmt::level_seg_desc::LsmTreeDesc,
+};
 
 use super::segment::SegID;
 
 pub trait Meta {
-    fn refresh_meta(&mut self) -> GResult<()>;
+    fn refresh_meta(&mut self, conn: &dyn StorageConnector) -> GResult<()>;
 
-    fn get_tail_from_cache(&self) -> GResult<SegID>;
-    fn get_tree_desc_from_cache(&self) -> GResult<LsmTreeDesc>;
+    fn get_tail_from_cache(&self) -> SegID;
+    fn get_tree_desc_from_cache(&self) -> LsmTreeDesc;
 
-    fn get_refreshed_tail(&mut self) -> GResult<SegID>;
-    fn get_refreshed_tree_desc(&mut self) -> GResult<LsmTreeDesc>;
-    fn verify_lock_status(&self, lock_req: &AirLockRequest) -> GResult<()>;
+    fn get_refreshed_tail(&mut self, conn: &dyn StorageConnector) -> GResult<SegID>;
+    fn get_refreshed_tree_desc(&mut self, conn: &dyn StorageConnector) -> GResult<LsmTreeDesc>;
+    fn verify_lock_status(
+        &mut self,
+        conn: &dyn StorageConnector,
+        lock_check: &AirLockCheck,
+    ) -> GResult<AirLockStatus<AirLockID>>;
 
-    fn append_tree_delta(&self, delta: &TreeDelta) -> GResult<()>;
-    fn append_lock_request(&self, lock_req: &AirLockRequest) -> GResult<()>;
+    fn check_commit(&mut self, conn: &dyn StorageConnector, lock_id: &AirLockID) -> bool;
+
+    fn append_commit_info(
+        &self,
+        conn: &dyn StorageConnector,
+        commit_info: CommitInfo,
+    ) -> GResult<()>;
+
+    fn append_lock_request(
+        &self,
+        conn: &dyn StorageConnector,
+        lock_req: &AirLockRequest,
+    ) -> GResult<()>;
 }

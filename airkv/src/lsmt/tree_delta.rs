@@ -1,6 +1,9 @@
-use crate::common::{bytebuffer::ByteBuffer, error::GResult, readbuffer::ReadBuffer, serde::Serde};
+use crate::{
+    common::{bytebuffer::ByteBuffer, error::GResult, readbuffer::ReadBuffer, serde::Serde},
+    storage::{segment::SegID},
+};
 
-use super::level_seg_desc::{SegDesc, LevelSegDesc};
+use super::level_seg_desc::{LevelSegDesc, SegDesc};
 
 pub struct LevelDelta {
     /// when level_id == u8::MAX, it denotes the update of the tail seg
@@ -106,6 +109,14 @@ impl TreeDelta {
         Self {
             levels_delta: level_vec,
         }
+    }
+
+    // TODO: avoid using this method, use update_tail_delta instead
+    pub fn update_tail_delta_from_segid(old_tail: SegID, new_tail: SegID) -> Self {
+        TreeDelta::update_tail_delta(
+            SegDesc::new_from_id(old_tail),
+            SegDesc::new_from_id(new_tail),
+        )
     }
 
     pub fn get_levels_delta(&self) -> &[LevelDelta] {
