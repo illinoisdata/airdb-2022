@@ -440,7 +440,7 @@ mod tests {
 
     // check reading partially, unaligned
     {
-      // read in from between(1, 2) and between(7, 8)... should ignore 1 + 7
+      // read in from between(1, 2) and between(7, 8)... should include 1 + 7 to be safe
       let pos_1 = kps[1].position;
       let pos_2 = kps[2].position;
       let pos_1half = (pos_1 + pos_2) / 2;
@@ -450,8 +450,8 @@ mod tests {
       let reader = arrstore.read_within(pos_1half, pos_7half - pos_1half)?;
       let mut reader_iter = reader.iter();
 
-      // should read 2, 3, 4, 5, 6 pairs
-      for idx in 2..7 {  
+      // should read 2, 3, 4, 5, 6, 7 pairs
+      for idx in 2..8 {  
         let kb = reader_iter.next().expect("Expect more data buffer");
         assert_eq!(kb.key, test_keys[idx], "Read key does not match (partial)");
         assert_eq!(&kb.buffer[..], test_buffers[idx], "Read buffer does not match (partial)");
