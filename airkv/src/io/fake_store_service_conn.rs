@@ -319,7 +319,7 @@ mod tests {
         println!("open success");
         first_conn.create(test_url)?;
         println!("create success");
-        assert!(FileUtil::exist(test_url)?);
+        assert!(FileUtil::exist(test_url));
         assert_eq!(first_conn.get_size(test_url)?, 0);
         first_conn.seal(test_url)?;
         println!("seal success");
@@ -334,7 +334,7 @@ mod tests {
             _ => panic!("unexpected append response"),
         }
         first_conn.remove(test_url)?;
-        assert!(!FileUtil::exist(test_url)?);
+        assert!(!FileUtil::exist(test_url));
         Ok(())
     }
 

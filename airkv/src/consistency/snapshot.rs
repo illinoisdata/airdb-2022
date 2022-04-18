@@ -30,12 +30,17 @@ impl Snapshot {
     ) -> GResult<Option<Entry>> {
         let level_num = self.lsmt_desc.get_level_num();
         // search in the tail segment
-        let res = seg_manager
-            .get_data_seg(self.lsmt_desc.get_tail())
-            .search_entry_in_range(conn, key, &Range::new(0, self.tail_len))?;
+        let tail_search_res = if self.tail_len != 0 {
+            // search in the tail segment
+            seg_manager
+                .get_data_seg(self.lsmt_desc.get_tail())
+                .search_entry_in_range(conn, key, &Range::new(0, self.tail_len))?
+        } else {
+            None
+        };
 
-        if res.is_some() {
-            Ok(res)
+        if tail_search_res.is_some() {
+            Ok(tail_search_res)
         } else {
             // search in level0-N
             let mut result: Option<Entry> = None;

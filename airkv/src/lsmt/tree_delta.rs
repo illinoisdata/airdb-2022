@@ -1,12 +1,13 @@
 use crate::{
     common::{bytebuffer::ByteBuffer, error::GResult, readbuffer::ReadBuffer, serde::Serde},
-    storage::{segment::SegID},
+    storage::{seg_util::SegIDUtil, segment::SegID},
 };
 
 use super::level_seg_desc::{LevelSegDesc, SegDesc};
 
+pub static TAIL_LEVEL_ID: u8 = u8::MAX;
 pub struct LevelDelta {
-    /// when level_id == u8::MAX, it denotes the update of the tail seg
+    /// when level_id == TAIL_LEVEL_ID(u8::MAX), it denotes the update of the tail seg
     level_id: u8,
     /// true: add the segs
     /// false: delete the segs
@@ -27,7 +28,7 @@ impl LevelDelta {
 
     pub fn new_tail(seg_new: SegDesc) -> Self {
         Self {
-            level_id: u8::MAX,
+            level_id: TAIL_LEVEL_ID,
             operation: true,
             segs: vec![seg_new],
         }
@@ -48,12 +49,12 @@ impl LevelDelta {
     }
 
     ///This method give out
-    pub fn get_segs(&self) -> &Vec<SegDesc> {
+    pub fn get_segs(&self) -> &[SegDesc] {
         &self.segs
     }
 
     pub fn is_tail_update(&self) -> bool {
-        self.level_id == u8::MAX
+        self.level_id == TAIL_LEVEL_ID
     }
 }
 
@@ -99,7 +100,13 @@ impl TreeDelta {
         }
     }
 
-    pub fn update_tail_delta(old_tail: SegDesc, new_tail: SegDesc) -> Self {
+    pub fn new_tail_delta_from_id(tail: SegID) -> Self {
+        Self {
+            levels_delta: vec![LevelDelta::new_tail(SegDesc::new_from_id(tail))],
+        }
+    }
+
+    fn update_tail_delta(old_tail: SegDesc, new_tail: SegDesc) -> Self {
         // add new tail
         // move old tail to L0
         let level_vec: Vec<LevelDelta> = vec![
@@ -111,12 +118,33 @@ impl TreeDelta {
         }
     }
 
-    // TODO: avoid using this method, use update_tail_delta instead
-    pub fn update_tail_delta_from_segid(old_tail: SegID, new_tail: SegID) -> Self {
-        TreeDelta::update_tail_delta(
-            SegDesc::new_from_id(old_tail),
-            SegDesc::new_from_id(new_tail),
-        )
+    // TODO: avoid using this method, use update_tail_delta_for_newinstead
+    pub fn update_tail_delta_from_segid(new_tail: SegID) -> Self {
+        let old_tail_op = SegIDUtil::gen_prev_tail(new_tail);
+        match old_tail_op {
+            Some(old_tail) => TreeDelta::update_tail_delta(
+                SegDesc::new_from_id(old_tail),
+                SegDesc::new_from_id(new_tail),
+            ),
+            None => {
+                // no old tail
+                TreeDelta::new_tail_delta_from_id(new_tail)
+            }
+        }
+    }
+
+    pub fn update_tail_delta_for_new(new_tail: SegDesc) -> Self {
+        let old_tail_op = SegIDUtil::gen_prev_tail(new_tail.get_id());
+        match old_tail_op {
+            Some(old_tail) => TreeDelta::update_tail_delta(
+                SegDesc::new_from_id(old_tail),
+                new_tail,
+            ),
+            None => {
+                // no old tail
+                TreeDelta::new_tail_delta(new_tail)
+            }
+        }
     }
 
     pub fn get_levels_delta(&self) -> &[LevelDelta] {

@@ -10,7 +10,7 @@ use super::{
     data_segment::DataSegment,
     meta::Meta,
     meta_segment::MetaSegment,
-    segment::{SegID, Segment, SegmentInfo},
+    segment::{SegID, Segment, SegmentInfo}, seg_util::SegIDUtil,
 };
 
 pub type DataCache = HashMap<SegID, DataSegment>;
@@ -59,6 +59,14 @@ impl SegmentManager {
     // TODO:  find a better way to get metasegment
     pub fn get_cached_tail_seg(&mut self) -> &mut DataSegment {
         self.get_data_seg(self.meta_cache.get_tail_from_cache())
+    }
+
+    pub fn get_cached_tail_id(&self) -> SegID {
+        self.get_meta_seg().get_tail_from_cache()
+    }
+
+    pub fn has_valid_tail(&self) -> bool {
+        !SegIDUtil::is_uninit_tail(self.get_meta_seg().get_tail_from_cache())
     }
 
     pub fn get_updated_tail_seg(&mut self, conn: &dyn StorageConnector) -> &mut DataSegment {

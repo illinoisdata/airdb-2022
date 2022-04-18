@@ -66,7 +66,7 @@ impl Segment for DataSegment {
                 // read cache again, expect a cache hit
                 match self.data_cache.get(cache_range)? {
                     CacheHitStatus::Hit { data } => Ok(data),
-                    _ => panic!("unexpected cache status"),
+                    _ => panic!("unexpected cache status for range {:?}",cache_range),
                 }
             }
         }
@@ -169,6 +169,7 @@ impl EntryAccess for DataSegment {
 
 #[cfg(test)]
 mod tests {
+    use rand::Rng;
     use std::collections::HashMap;
 
     use tempfile::TempDir;
@@ -181,7 +182,7 @@ mod tests {
         },
         storage::{
             data_entry::{AppendRes, EntryAccess},
-            segment::{Entry, SegmentInfo, SegmentType, Segment},
+            segment::{Entry, SegID, Segment, SegmentInfo, SegmentType}, seg_util::DATA_SEG_ID_MIN,
         },
     };
 
@@ -194,7 +195,7 @@ mod tests {
         let fake_props: &HashMap<String, String> = &HashMap::new();
         first_conn.open(fake_props)?;
 
-        let fake_seg_id = 0u32;
+        let fake_seg_id: SegID = DATA_SEG_ID_MIN;
         let temp_dir = TempDir::new()?;
         let fake_path = UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?;
         let mut seg = DataSegment::new(SegmentInfo::new(
@@ -255,6 +256,20 @@ mod tests {
             .zip(entries_read_cache_repeat)
             .for_each(|(origin, read)| assert_eq!(*origin, read));
 
+        // test search
+        (0..30).for_each(|_| {
+            // get target kv
+            let target_entry = &data_entries[rand::thread_rng().gen_range(0..100)];
+            // search kv
+            let search_entry_res = seg.search_entry(&first_conn, target_entry.get_key());
+            assert!(search_entry_res.is_ok());
+            let search_entry_op = search_entry_res.unwrap();
+            assert!(search_entry_op.is_some());
+            let search_entry = search_entry_op.unwrap();
+            assert_eq!(target_entry.get_key(), search_entry.get_key());
+            assert_eq!(target_entry.get_value(), search_entry.get_value());
+        });
+
         Ok(())
     }
 
@@ -265,7 +280,7 @@ mod tests {
         let fake_props: &HashMap<String, String> = &HashMap::new();
         first_conn.open(fake_props)?;
 
-        let fake_seg_id = 0u32;
+        let fake_seg_id: SegID = DATA_SEG_ID_MIN;
         let temp_dir = TempDir::new()?;
         let fake_path = UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?;
         let mut seg = DataSegment::new(SegmentInfo::new(
@@ -315,6 +330,20 @@ mod tests {
             .iter()
             .zip(entries_read_cache_repeat)
             .for_each(|(origin, read)| assert_eq!(*origin, read));
+
+        // test search
+        (0..30).for_each(|_| {
+            // get target kv
+            let target_entry = &data_entries[rand::thread_rng().gen_range(0..100)];
+            // search kv
+            let search_entry_res = seg.search_entry(&first_conn, target_entry.get_key());
+            assert!(search_entry_res.is_ok());
+            let search_entry_op = search_entry_res.unwrap();
+            assert!(search_entry_op.is_some());
+            let search_entry = search_entry_op.unwrap();
+            assert_eq!(target_entry.get_key(), search_entry.get_key());
+            assert_eq!(target_entry.get_value(), search_entry.get_value());
+        });
 
         Ok(())
     }

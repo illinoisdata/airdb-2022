@@ -7,10 +7,8 @@ use uuid::Uuid;
 use crate::{
     common::{bytebuffer::ByteBuffer, error::GResult, readbuffer::ReadBuffer, serde::Serde},
     io::storage_connector::StorageConnector,
-    lsmt::tree_delta::TreeDelta,
-    storage::{
-        meta::Meta, segment::SegID, segment_manager::SegmentManager, seg_util::SegIDUtil,
-    },
+    lsmt::{tree_delta::TreeDelta},
+    storage::{meta::Meta, seg_util::SegIDUtil, segment::SegID, segment_manager::SegmentManager},
 };
 
 pub static LOCK_TIMEOUT_IN_SEC: u16 = 60;
@@ -19,13 +17,13 @@ pub static TIMEOUT: std::time::Duration = time::Duration::from_secs(LOCK_TIMEOUT
 pub static CLIENT_CLOCK_SKEW_IN_SEC: u8 = 10;
 
 // TODO: find efficient type and serialization way for clientid/timestamp
+// TODO: replace timestamp with a incremental number
 // uuid is too long for a lock request
 pub type ClientID = Uuid;
 pub type ResourceID = SegID;
 pub type Timestamp = DateTime<Utc>;
 
-//TODO: test eq
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct AirLockID {
     client_id: ClientID,
     start_timestamp: Timestamp,
@@ -43,6 +41,15 @@ impl AirLockID {
         &self.client_id
     }
 }
+
+impl PartialEq for AirLockID {
+    fn eq(&self, other: &Self) -> bool {
+        self.client_id == other.client_id
+            && self.start_timestamp.timestamp_millis() == other.start_timestamp.timestamp_millis()
+    }
+}
+
+impl Eq for AirLockID {}
 
 impl Display for AirLockID {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -65,6 +72,26 @@ impl Serde<AirLockID> for AirLockID {
         let client_id = Uuid::from_u128(buff.read_u128());
         let timestamp = Utc.timestamp_millis(buff.read_i64());
         AirLockID::new(client_id, timestamp)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    use crate::common::{bytebuffer::ByteBuffer, error::GResult, serde::Serde};
+
+    use super::AirLockID;
+
+    #[test]
+    fn airlockid_serde_test() -> GResult<()> {
+        let lock_id = AirLockID::new(Uuid::new_v4(), Utc::now());
+        let mut buffer = ByteBuffer::new();
+        lock_id.serialize(&mut buffer)?;
+        let deserialized_lock = AirLockID::deserialize(&mut buffer);
+        assert!(lock_id == deserialized_lock);
+        Ok(())
     }
 }
 
@@ -317,8 +344,7 @@ impl CriticalOperation for TailUpdateCO {
         // create new tail
         seg_manager.create_new_tail_seg(conn, new_tail)?;
         // update tree desc: add old tail to level 0 and add a new tail
-        let delta: TreeDelta =
-            TreeDelta::update_tail_delta_from_segid(SegIDUtil::gen_prev_tail(new_tail), new_tail);
+        let delta: TreeDelta = TreeDelta::update_tail_delta_from_segid(new_tail);
         // self.seg_manager.append_tree_delta(&delta)
         seg_manager
             .get_mut_meta_seg()
@@ -334,12 +360,17 @@ impl CriticalOperation for TailUpdateCO {
     }
 
     fn check_uninit(&self, conn: &dyn StorageConnector, seg_manager: &mut SegmentManager) -> bool {
-        let origin_tail = SegIDUtil::gen_prev_tail(self.res_ids[0]);
-        let updated_tail = seg_manager
-            .get_mut_meta_seg()
-            .get_refreshed_tail(conn)
-            .unwrap_or_else(|_| panic!("failed to check init status {}", origin_tail));
-        updated_tail == origin_tail
+        let new_tail = self.res_ids[0];
+        // update meta
+        match seg_manager.refresh_meta(conn) {
+            Ok(_) => SegIDUtil::is_new_tail(new_tail, seg_manager.get_cached_tail_id()),
+            Err(_) => {
+                println!("WARN: refresh meta failed when check uninit");
+                // just return true to let the client try to acquire the lock
+                // TODO: find a better way to cope with this case(such as retry refreshing meta )
+                true
+            },
+        }
     }
 }
 

@@ -102,10 +102,14 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
     // fn open(&'b mut self, props: &HashMap<String, String>) -> GResult<()> {
     fn open(&mut self, props: &HashMap<String, String>) -> GResult<()> {
         self.store_connector.open(props)?;
-        // TODO: find a way to create the meta segment and the first tail segment
-        // for now, just assume we have already created the meta and tail segment before launching the client
+        // TODO: find a way to create the meta segment
+        // for now, just assume we have already created the meta before launching the client
         // refresh meta
         self.seg_manager.refresh_meta(&self.store_connector)?;
+        if !self.seg_manager.has_valid_tail() {
+            // create the tail segment if necessary
+            self.create_or_get_updated_tail(self.seg_manager.get_cached_tail_id())?;
+        }
         //TODO: finish other initial work
         Ok(())
     }
@@ -129,7 +133,8 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
                     // seal the old tail
                     tail_seg.seal(&self.store_connector)?;
                     // try to update tail
-                    self.create_or_get_updated_tail(tail_id)
+                    self.create_or_get_updated_tail(tail_id)?;
+                    Ok(())
                 }
             }
             AppendRes::BlockCountExceedFailure => {
@@ -213,39 +218,70 @@ impl<T: StorageConnector> RWDBImpl<T> {
         )
     }
 
-    fn create_or_get_updated_tail(&mut self, old_tail_id: SegID) -> GResult<()> {
+    // if there has been a new tail, just refresh the meta and get the new tail
+    // otherwise create a new tail
+    // return => whether the new tail has been created by the current client
+    fn create_or_get_updated_tail(&mut self, old_tail_id: SegID) -> GResult<bool> {
         let tail_update_co =
             TailUpdateCO::new(vec![SegIDUtil::gen_next_tail(old_tail_id)], self.client_id);
-
-        while tail_update_co.check_uninit(&self.store_connector, &mut self.seg_manager)
-            && AirLockManager::run_with_single_lock(
+        let mut run_success: bool = false;
+        loop {
+            let is_uninit =
+                tail_update_co.check_uninit(&self.store_connector, &mut self.seg_manager);
+            if !is_uninit {
+                break;
+            }
+            run_success = AirLockManager::run_with_single_lock(
                 &self.store_connector,
                 &mut self.seg_manager,
                 &tail_update_co,
-            )
-        {
-            thread::sleep(TIMEOUT);
+            );
+
+            if run_success {
+                break;
+            } else {
+                thread::sleep(TIMEOUT);
+            }
         }
-        Ok(())
+
+        Ok(run_success)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+        thread::{self, JoinHandle},
+    };
 
     use tempfile::TempDir;
     use url::Url;
 
-    use crate::{common::error::GResult, io::{file_utils::UrlUtil, fake_store_service_conn::FakeStoreServiceConnector, storage_connector::{StorageConnector, StorageType}}, storage::segment::SegmentInfo, db::rw_db::DBFactory};
-
-  
+    use crate::{
+        common::error::GResult,
+        db::rw_db::{DBFactory, RWDBImpl, RWDB},
+        io::{
+            fake_store_service_conn::FakeStoreServiceConnector,
+            file_utils::{FileUtil, UrlUtil},
+            storage_connector::{StorageConnector, StorageType},
+        },
+        lsmt::level_seg_desc::PLACEHOLDER_DATASEG_ID,
+        storage::{
+            seg_util::{DATA_SEG_ID_MIN, META_SEG_ID},
+            segment::SegmentInfo,
+        },
+    };
 
     #[test]
     fn db_test() -> GResult<()> {
         let temp_dir = TempDir::new()?;
         let home_url: Url =
-            UrlUtil::url_from_path(temp_dir.path())?;
+            UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?;
         println!("home directory: {}", home_url.path());
         // create meta segment and the first tail segment
         let mut first_conn = FakeStoreServiceConnector::default();
@@ -256,13 +292,100 @@ mod tests {
         first_conn.create(&meta_url)?;
         println!("meta directory: {}", meta_url.path());
         // first tail
-        let tail_url = SegmentInfo::generate_dir(&home_url, 1<<30, 0);
+        let tail_url = SegmentInfo::generate_dir(&home_url, DATA_SEG_ID_MIN, 0);
 
         first_conn.create(&tail_url)?;
 
         let mut db = DBFactory::new_rwdb(home_url, StorageType::RemoteFakeStore);
         db.open(fake_props)?;
         db.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn tail_update_test() -> GResult<()> {
+        let temp_dir = TempDir::new()?;
+        let home_url: Url =
+            UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?;
+
+        println!("home directory: {}", home_url.path());
+        // create meta segment in advance
+        let mut first_conn = FakeStoreServiceConnector::default();
+        let fake_props: &HashMap<String, String> = &HashMap::new();
+        first_conn.open(fake_props)?;
+        let meta_url = SegmentInfo::generate_dir(&home_url, META_SEG_ID, 0);
+        first_conn.create(&meta_url)?;
+        println!("meta directory: {}", meta_url.path());
+        let mut db_impl = RWDBImpl::<FakeStoreServiceConnector>::new_from_connector(
+            home_url.clone(),
+            FakeStoreServiceConnector::default(),
+        );
+        db_impl.open(fake_props)?;
+        let create_res = db_impl.create_or_get_updated_tail(PLACEHOLDER_DATASEG_ID)?;
+        // assert creation failure because the new tail has been created in db_impl.open()
+        assert!(!create_res);
+        // check whether the tail segment exists
+        let tail_path = SegmentInfo::generate_dir(&home_url, DATA_SEG_ID_MIN, 0);
+        println!("lalal {}", tail_path.path());
+        assert!(FileUtil::exist(&tail_path));
+        db_impl.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn multi_thread_tail_update_test() -> GResult<()> {
+        let temp_dir = TempDir::new()?;
+        let home_url: Url = UrlUtil::url_from_path(
+            temp_dir.path().join("test-file.bin").as_path(),
+        )?;
+        // create meta segment in advance
+        let mut first_conn = FakeStoreServiceConnector::default();
+        let fake_props: &HashMap<String, String> = &HashMap::new();
+        first_conn.open(fake_props)?;
+        let meta_url = SegmentInfo::generate_dir(&home_url, META_SEG_ID, 0);
+        first_conn.create(&meta_url)?;
+        println!("meta directory: {}", meta_url.path());
+
+        let global_tail_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+
+        // create tail in multiple threads
+        let handles: Vec<JoinHandle<()>> = (1..10)
+            .map(|_x| {
+                let cur_home = home_url.clone();
+                let tail_count_clone = global_tail_count.clone();
+
+                thread::spawn(move || {
+                    let mut db_impl = RWDBImpl::<FakeStoreServiceConnector>::new_from_connector(
+                        cur_home,
+                        FakeStoreServiceConnector::default(),
+                    );
+                    let props: &HashMap<String, String> = &HashMap::new();
+                    db_impl.store_connector.open(props).expect("open storage connector failed");
+
+
+                    match db_impl.create_or_get_updated_tail(PLACEHOLDER_DATASEG_ID) {
+                        Ok(create_res) => {
+                            if create_res {
+                                tail_count_clone.fetch_add(1, Ordering::SeqCst);
+                            }
+                        }
+                        Err(err) => {
+                            println!("ERROR: create_or_get_updated_tail failed: {:?}", err);
+                        }
+                    };
+                })
+            })
+            .collect::<_>();
+
+        handles
+            .into_iter()
+            .for_each(|handle| {
+                handle.join().expect("join failure")
+            });
+
+        // assure only one thread has created the tail
+        assert_eq!(global_tail_count.load(Ordering::SeqCst), 1);
+
         Ok(())
     }
 }

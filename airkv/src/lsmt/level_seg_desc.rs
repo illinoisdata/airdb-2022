@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering};
 
 use crate::{
     common::{bytebuffer::ByteBuffer, error::GResult, readbuffer::ReadBuffer, serde::Serde},
@@ -7,9 +7,10 @@ use crate::{
 
 use super::tree_delta::{LevelDelta, TreeDelta};
 
-//TODO: change it into true default id
-static DEFAULT_SEGID: SegID = 0;
+pub static PLACEHOLDER_DATASEG_ID: SegID = 0;
 
+
+// SegDesc describes a data segment, it won't be used to describe the meta segment
 #[derive(Clone)]
 pub struct SegDesc {
     seg_id: SegID,
@@ -25,7 +26,7 @@ pub struct SegDesc {
 impl Default for SegDesc {
     fn default() -> Self {
         Self {
-            seg_id: DEFAULT_SEGID,
+            seg_id: PLACEHOLDER_DATASEG_ID,
             min: None,
             max: None,
         }
@@ -127,6 +128,7 @@ pub struct LevelSegDesc {
     /// The number of segments in the level.
     seg_num: u32,
     segs_desc: Vec<SegDesc>,
+    // segs_desc: BinaryHeap<SegDesc>
 }
 
 impl LevelSegDesc {
@@ -134,6 +136,7 @@ impl LevelSegDesc {
         Self {
             seg_num: seg_num_new,
             segs_desc: segs_desc_new,
+            // segs_desc: BinaryHeap::from(segs_desc_new),
         }
     }
 
@@ -145,8 +148,11 @@ impl LevelSegDesc {
         self.seg_num
     }
 
-    pub fn get_segs(&self) -> &[SegDesc] {
-        &self.segs_desc
+    pub fn get_segs(&self) -> Vec<SegDesc> {
+        //TODO: find a optimized structure for segs_desc 
+        let mut segs = self.segs_desc.clone();
+        segs.sort_by(|a, b| b.cmp(a));
+        segs
     }
 
     pub fn append_level_delta(&mut self, level_delta: &LevelDelta) {
@@ -161,6 +167,7 @@ impl LevelSegDesc {
     }
 
     fn append_segs(&mut self, segs: &[SegDesc]) {
+        // segs.iter().for_each(|seg|{self.segs_desc.push(*seg)});
         self.segs_desc.extend_from_slice(segs);
         self.seg_num = self.segs_desc.len() as u32;
     }
@@ -202,9 +209,9 @@ impl LsmTreeDesc {
         }
     }
 
-    // pub fn get_level_segs(&self, level: u8) -> Vec<SegID> {
-    //     self.levels_desc[level as usize].get_seg_ids()
-    // }
+    pub fn has_tail(&self) -> bool {
+         self.tail_desc.get_id() != PLACEHOLDER_DATASEG_ID
+    }
 
     pub fn get_level_num(&self) -> u8 {
         self.level_num

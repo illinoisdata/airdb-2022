@@ -130,6 +130,7 @@ impl FakeStoreService for ServiceImpl {
                         panic!("Problem getting block number of path[{}]", url.path())
                     })
                 };
+                println!("get props {}, len: {}, block_num: {}, is_sealed: {}", url.path(), len, block_num, is_seal);
 
                 Ok(Response::new(GetPropsResponse {
                     seglen: len,
@@ -156,6 +157,7 @@ impl FakeStoreService for ServiceImpl {
                     &format!("seal {}", path),
                 );
                 BLOCKNUM_MAP.remove(path);
+                println!("seal {}", url.path());
                 response
             })
             .await;
@@ -206,6 +208,9 @@ impl FakeStoreService for ServiceImpl {
                         let block_num = *BLOCKNUM_MAP.get(path).unwrap_or_else(|| {
                             panic!("Problem getting block number of path[{}]", path)
                         });
+
+                        println!("append {}", url.path());
+
 
                         AppendResponse {
                             status: AppendRes::Success(0).to_status_code(),

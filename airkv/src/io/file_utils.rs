@@ -67,8 +67,8 @@ impl FileUtil {
         Ok(())
     }
 
-    pub fn exist(path: &Url) -> GResult<bool> {
-        Ok(Path::new(path.path()).exists())
+    pub fn exist(path: &Url) -> bool {
+        Path::new(path.path()).exists()
     }
 
     pub fn seal_file(path: &Url) -> GResult<()> {

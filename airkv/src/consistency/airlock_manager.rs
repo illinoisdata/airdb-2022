@@ -95,3 +95,17 @@ impl AirLockManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::common::error::GResult;
+
+
+    #[test]
+    fn lock_test() -> GResult<()> {
+        
+
+        Ok(())
+    }
+
+}
