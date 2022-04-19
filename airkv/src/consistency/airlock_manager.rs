@@ -72,26 +72,31 @@ impl AirLockManager {
         client_id: ClientID,
     ) -> AirLockStatus<AirLockID> {
         let lock_req: &AirLockRequest = &AirLockRequest::new(critical_res_ids, client_id);
-        match meta.append_lock_request(conn, lock_req) {
-            Ok(_) => {
-                match meta.verify_lock_status(conn, &AirLockCheck::new(lock_req.get_lock_id())) {
-                    Ok(lock_status) => lock_status,
-                    Err(error) => {
-                        println!(
-                            "ERROR: error happens when verifying lock status: {:?}",
-                            error
-                        );
-                        AirLockStatus::Failed
+        if meta.can_acquire_lock_by_cache(lock_req) {
+            match meta.append_lock_request(conn, lock_req) {
+                Ok(_) => {
+                    match meta.verify_lock_status(conn, &AirLockCheck::new(lock_req.get_lock_id()))
+                    {
+                        Ok(lock_status) => lock_status,
+                        Err(error) => {
+                            println!(
+                                "ERROR: error happens when verifying lock status: {:?}",
+                                error
+                            );
+                            AirLockStatus::Failed
+                        }
                     }
                 }
+                Err(error) => {
+                    println!(
+                        "ERROR: error happens when appending lock requests to the meta segment: {:?}",
+                        error
+                    );
+                    AirLockStatus::Failed
+                }
             }
-            Err(error) => {
-                println!(
-                    "ERROR: error happens when appending lock requests to the meta segment: {:?}",
-                    error
-                );
-                AirLockStatus::Failed
-            }
+        } else {
+            AirLockStatus::Failed
         }
     }
 }
@@ -100,12 +105,8 @@ impl AirLockManager {
 mod tests {
     use crate::common::error::GResult;
 
-
     #[test]
     fn lock_test() -> GResult<()> {
-        
-
         Ok(())
     }
-
 }

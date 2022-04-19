@@ -63,6 +63,10 @@ impl Meta for MetaSegment {
         self.meta_cache.get_tree_desc()
     }
 
+    fn can_acquire_lock_by_cache(&self, req: &AirLockRequest) -> bool {
+        self.meta_cache.get_airlock_tracker().can_acquire(req)
+    }
+
     fn append_commit_info(
         &self,
         conn: &dyn StorageConnector,
@@ -107,7 +111,7 @@ impl Meta for MetaSegment {
         //check the lock status from lock tracker
         Ok(self
             .meta_cache
-            .get_airlock_tracker()
+            .get_airlock_tracker_mut()
             .valid_lock_holder(lock_req))
     }
 
@@ -129,7 +133,7 @@ impl Meta for MetaSegment {
                     // check if it is a valid commit
                     if self
                         .meta_cache
-                        .get_airlock_tracker()
+                        .get_airlock_tracker_mut()
                         .append_commit(&commit_info)
                     {
                         // append commit content
@@ -151,7 +155,7 @@ impl Meta for MetaSegment {
     fn check_commit(&mut self, conn: &dyn StorageConnector, lock_id: &AirLockID) -> bool {
         //refresh meta
         self.refresh_meta(conn).expect("failed to refresh meta");
-        self.meta_cache.get_airlock_tracker().check_commit(lock_id)
+        self.meta_cache.get_airlock_tracker_mut().check_commit(lock_id)
     }
 }
 
@@ -170,9 +174,9 @@ impl Segment for MetaSegment {
         todo!()
     }
 
-    fn seal(&self, _conn: &dyn StorageConnector) -> GResult<()> {
-        //won't support
-        todo!()
+    fn seal(&self, conn: &dyn StorageConnector) -> GResult<()> {
+        //useless
+        conn.seal(self.get_path())
     }
 }
 
@@ -181,13 +185,13 @@ impl Segment for MetaSegment {
 mod tests {
     use std::collections::HashMap;
 
-    use chrono::Utc;
+    
     use tempfile::TempDir;
     use uuid::Uuid;
 
     use crate::{
         common::error::GResult,
-        consistency::airlock::{AirLockID, AirLockRequest, CommitInfo},
+        consistency::airlock::{AirLockRequest, CommitInfo},
         io::{
             fake_store_service_conn::FakeStoreServiceConnector, file_utils::UrlUtil,
             storage_connector::StorageConnector,
@@ -204,33 +208,7 @@ mod tests {
     };
 
     #[test]
-    fn lo_test() -> GResult<()> {
-
-        Ok(())
-    }
-
-
     fn meta_segment_test() -> GResult<()> {
-        // fn verify_lock_status(
-        //     &mut self,
-        //     conn: &dyn StorageConnector,
-        //     lock_check: &AirLockCheck,
-        // ) -> GResult<AirLockStatus<AirLockID>>;
-
-        // fn check_commit(&mut self, conn: &dyn StorageConnector, lock_id: &AirLockID) -> bool;
-
-        // fn append_commit_info(
-        //     &self,
-        //     conn: &dyn StorageConnector,
-        //     commit_info: CommitInfo,
-        // ) -> GResult<()>;
-
-        // fn append_lock_request(
-        //     &self,
-        //     conn: &dyn StorageConnector,
-        //     lock_req: &AirLockRequest,
-        // ) -> GResult<()>;
-
         //test tail Segment
         let mut first_conn = FakeStoreServiceConnector::default();
         let fake_props: &HashMap<String, String> = &HashMap::new();
@@ -250,9 +228,10 @@ mod tests {
         // 1. add tail
         let first_tail = SegDesc::new_from_id(DATA_SEG_ID_MIN);
         let first_tail_id = first_tail.get_id();
-        // seg.append_tree_delta(&TreeDelta::new_tail_delta(default_tail.clone()))?;
+        let lock_req = AirLockRequest::new(vec![first_tail_id], fake_client_id);
+        seg.append_lock_request(&first_conn, &lock_req)?;
         let commit_info = CommitInfo::new(
-            AirLockID::new(fake_client_id, Utc::now()),
+            lock_req.get_lock_id(),
             TreeDelta::new_tail_delta_from_id(first_tail_id),
         );
         seg.append_commit_info(&first_conn, commit_info)?;
@@ -261,8 +240,10 @@ mod tests {
         // 2. update tail
         let new_tail = SegDesc::new(SegIDUtil::gen_next_tail(first_tail_id), None, None);
         let new_tail_id = new_tail.get_id();
+        let new_lock_req = AirLockRequest::new(vec![new_tail_id], fake_client_id);
+        seg.append_lock_request(&first_conn, &new_lock_req)?;
         let commit_info_1 = CommitInfo::new(
-            AirLockID::new(fake_client_id, Utc::now()),
+            new_lock_req.get_lock_id(),
             TreeDelta::update_tail_delta_for_new(new_tail.clone()),
         );
         seg.append_commit_info(&first_conn, commit_info_1)?;
@@ -271,24 +252,17 @@ mod tests {
 
         let new_tail_1 = SegDesc::new(new_tail_id + 1, None, None);
         let new_tail_id_1 = new_tail_1.get_id();
-        // seg.append_tree_delta(&TreeDelta::update_tail_delta(new_tail.clone(), new_tail_1))?;
 
+        let new_lock_req_1= AirLockRequest::new(vec![new_tail_id_1], fake_client_id);
+        seg.append_lock_request(&first_conn, &new_lock_req_1)?;
         let commit_info_2 = CommitInfo::new(
-            AirLockID::new(fake_client_id, Utc::now()),
+            new_lock_req_1.get_lock_id(),
             TreeDelta::update_tail_delta_for_new(new_tail_1),
         );
         seg.append_commit_info(&first_conn, commit_info_2)?;
         assert_eq!(new_tail_id_1, seg.get_refreshed_tail(&first_conn)?);
 
-        // // 3. add lock request
-        // let fake_client_id = Uuid::new_v4();
-        // let fake_resources = vec![0u32, 1u32];
-        // let lock_req = AirLockRequest::new(fake_resources, fake_client_id);
-        // seg.append_lock_request(&first_conn, &lock_req)?;
-        // assert_eq!(new_tail_id_1, seg.get_refreshed_tail(&first_conn)?);
-        // //TODO: refresh meta and verify the lock request.
-
-        // 4. update the lsm structure after compaction
+        // 3. update the lsm structure after compaction
         // compact default_tail(id: 0) + new_tail(id: 1) => L1 segment(id: 10)
         let l1_seg = SegDesc::new(SegIDUtil::get_dataseg_id_min(1), None, None);
         let l1_seg_id = l1_seg.get_id();
@@ -296,9 +270,11 @@ mod tests {
             LevelDelta::new(0, false, vec![first_tail, new_tail]),
             LevelDelta::new(1, true, vec![l1_seg]),
         ];
+        let new_lock_req_2 = AirLockRequest::new(vec![first_tail_id, new_tail_id], fake_client_id);
+        seg.append_lock_request(&first_conn, &new_lock_req_2)?;
 
         let commit_info_3 = CommitInfo::new(
-            AirLockID::new(fake_client_id, Utc::now()),
+            new_lock_req_2.get_lock_id(),
             TreeDelta::new(levels_delta),
         );
 
@@ -312,7 +288,6 @@ mod tests {
         // check level number
         assert_eq!(2, lsm_desc.get_level_num());
         // check segments in level 0
-        // assert!(lsm_desc.get_level_segs(0).is_empty());
         assert!(lsm_desc.get_level_desc(0).get_seg_num() == 0);
         // check segments in level 1
         assert_eq!(

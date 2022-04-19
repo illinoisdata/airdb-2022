@@ -303,7 +303,6 @@ impl LockHolder {
 pub trait CriticalOperation {
     fn check_uninit(&self, conn: &dyn StorageConnector, seg_manager: &mut SegmentManager) -> bool;
 
-    // fn run(&self, lock_id: AirLockID) -> GResult<()>;
     fn run(
         &self,
         conn: &dyn StorageConnector,

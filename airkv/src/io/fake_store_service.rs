@@ -195,16 +195,6 @@ impl FakeStoreService for ServiceImpl {
                             panic!("Problem flushing the append data to path[{}]", path)
                         });
                         BLOCKNUM_MAP.alter(path, |_, v| v + 1);
-                        // println!("XXXX blocknum_map len: {}", BLOCKNUM_MAP.len());
-                        // // for entry in BLOCKNUM_MAP.iter() {
-                        // //     println!("{}: {}", entry.key(), entry.value());
-                        // // }
-                        // BLOCKNUM_MAP.iter().for_each(|entry|{
-                        //     let key = entry.key();
-                        //     let value = *entry.value();
-                        //     println!("hhh{}: {}", key, value);
-
-                        // });
                         let block_num = *BLOCKNUM_MAP.get(path).unwrap_or_else(|| {
                             panic!("Problem getting block number of path[{}]", path)
                         });

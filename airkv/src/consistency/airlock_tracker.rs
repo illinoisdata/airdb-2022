@@ -124,17 +124,22 @@ impl AirLockTracker {
         }
     }
 
-    fn append_acquire_req(&mut self, req: &AirLockRequest) -> bool {
+    pub fn can_acquire(&self, req: &AirLockRequest) -> bool {
         let res_ids = req.get_res_ids();
-        let client_id = req.get_client();
-        let timestamp = req.get_request_time();
         let acquire_result = res_ids
             .iter()
             .map(|id| self.try_acquire(id, req))
             .collect::<Vec<AirLockStatus<AirLockID>>>();
-        let is_acquired = acquire_result.iter().all(|res| res.is_success());
+        acquire_result.iter().all(|res| res.is_success())
+    }
 
-        if is_acquired {
+    fn append_acquire_req(&mut self, req: &AirLockRequest) -> bool {
+        let res_ids = req.get_res_ids();
+        let client_id = req.get_client();
+        let timestamp = req.get_request_time();
+        let can_acquired = self.can_acquire(req);
+
+        if can_acquired {
             let new_holder = Rc::new(RefCell::new(LockHolder::new(
                 *client_id,
                 *timestamp,

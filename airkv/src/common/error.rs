@@ -68,7 +68,7 @@ impl ResultUtil {
                 Ok(Response::new(resp_transfer(res)))
             }
             Err(error) => {
-                eprintln!("encounter error for service {}: {}", service_name, error);
+                eprintln!("encounter error for service {}: {:?}", service_name, error);
                 Err(Status::new(Code::Unknown, format!("{:?}", error)))
             }
         }

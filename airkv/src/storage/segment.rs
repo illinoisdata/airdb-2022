@@ -9,8 +9,8 @@ use crate::io::storage_connector::StorageConnector;
 use super::data_entry::AppendRes;
 use super::seg_util::SegIDUtil;
 
-pub static SEG_BLOCK_NUM_LIMIT: u16 = 50;
-// pub static SEG_BLOCK_NUM_LIMIT: u16 = 50000;
+// pub static SEG_BLOCK_NUM_LIMIT: u16 = 5000;
+// pub static mut SEG_BLOCK_NUM_LIMIT: u16 = 50000;
 
 pub type SegLen = u64;
 

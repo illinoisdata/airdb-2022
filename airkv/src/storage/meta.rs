@@ -16,6 +16,8 @@ pub trait Meta {
     fn get_refreshed_tail(&mut self, conn: &dyn StorageConnector) -> GResult<SegID>;
     fn get_refreshed_tree_desc(&mut self, conn: &dyn StorageConnector) -> GResult<LsmTreeDesc>;
 
+    fn can_acquire_lock_by_cache(&self, req: &AirLockRequest) -> bool;
+
     fn verify_lock_status(
         &mut self,
         conn: &dyn StorageConnector,

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, thread};
+use std::{collections::HashMap};
 
 use url::Url;
 use uuid::Uuid;
@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::{
     common::error::{AppendError, GResult},
     consistency::{
-        airlock::{ClientID, CriticalOperation, TailUpdateCO, TIMEOUT},
+        airlock::{ClientID, CriticalOperation, TailUpdateCO},
         airlock_manager::AirLockManager,
         snapshot::Snapshot,
     },
@@ -19,7 +19,7 @@ use crate::{
         data_entry::{AppendRes, EntryAccess},
         meta::Meta,
         seg_util::SegIDUtil,
-        segment::{Entry, SegID, Segment, SegmentProps, SEG_BLOCK_NUM_LIMIT},
+        segment::{Entry, SegID, Segment, SegmentProps},
         segment_manager::SegmentManager,
     },
 };
@@ -76,14 +76,38 @@ pub trait RWDB {
 
     fn get_client_id(&self) -> ClientID;
 
+    fn get_props(&self) -> &DBProps;
+
     fn close(&mut self) -> GResult<()>;
+}
+
+pub struct DBProps {
+    seg_block_num_limit: u16,
+}
+
+impl Default for DBProps {
+    fn default() -> Self {
+        Self {
+            seg_block_num_limit: 50000,
+        }
+    }
+}
+
+impl DBProps {
+    pub fn set_seg_block_num_limit(&mut self, limit: u16) {
+        self.seg_block_num_limit = limit
+    }
+
+    pub fn get_seg_block_num_limit(&self) -> u16 {
+        self.seg_block_num_limit
+    }
 }
 
 pub struct RWDBImpl<T: StorageConnector> {
     store_connector: T,
     seg_manager: SegmentManager,
     client_id: ClientID,
-    // options:
+    props: DBProps,
 }
 
 impl<T: StorageConnector> RWDBImpl<T> {
@@ -93,6 +117,7 @@ impl<T: StorageConnector> RWDBImpl<T> {
             store_connector: connector_new,
             seg_manager: SegmentManager::new(client_id_new, home_dir_new),
             client_id: client_id_new,
+            props: DBProps::default(),
         }
     }
 }
@@ -101,10 +126,15 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
     // impl<'b> RWDB for RWDBImpl<'b> {
     // fn open(&'b mut self, props: &HashMap<String, String>) -> GResult<()> {
     fn open(&mut self, props: &HashMap<String, String>) -> GResult<()> {
+        match props.get("SEG_BLOCK_NUM_LIMIT") {
+            Some(block_num) => self.props.set_seg_block_num_limit(block_num.parse()?),
+            None => {}
+        }
         self.store_connector.open(props)?;
         // TODO: find a way to create the meta segment
         // for now, just assume we have already created the meta before launching the client
         // refresh meta
+
         self.seg_manager.refresh_meta(&self.store_connector)?;
         if !self.seg_manager.has_valid_tail() {
             // create the tail segment if necessary
@@ -127,7 +157,7 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
         match tail_seg.append_entries(&self.store_connector, entries_slice.iter()) {
             // match self.seg_manager.append_to_tail(tail_seg, entries) {
             AppendRes::Success(size) => {
-                if size < SEG_BLOCK_NUM_LIMIT {
+                if size < self.props.get_seg_block_num_limit() {
                     Ok(())
                 } else {
                     // seal the old tail
@@ -197,6 +227,10 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
     fn delete_entries(&mut self, entries: Vec<Key>) -> GResult<()> {
         todo!()
     }
+
+    fn get_props(&self) -> &DBProps {
+        &self.props
+    }
 }
 
 impl<T: StorageConnector> RWDBImpl<T> {
@@ -228,6 +262,7 @@ impl<T: StorageConnector> RWDBImpl<T> {
         loop {
             let is_uninit =
                 tail_update_co.check_uninit(&self.store_connector, &mut self.seg_manager);
+
             if !is_uninit {
                 break;
             }
@@ -239,8 +274,6 @@ impl<T: StorageConnector> RWDBImpl<T> {
 
             if run_success {
                 break;
-            } else {
-                thread::sleep(TIMEOUT);
             }
         }
 
@@ -316,6 +349,8 @@ mod tests {
         let meta_url = SegmentInfo::generate_dir(&home_url, META_SEG_ID, 0);
         first_conn.create(&meta_url)?;
         println!("meta directory: {}", meta_url.path());
+
+        // create db_impl
         let mut db_impl = RWDBImpl::<FakeStoreServiceConnector>::new_from_connector(
             home_url.clone(),
             FakeStoreServiceConnector::default(),
@@ -335,9 +370,8 @@ mod tests {
     #[test]
     fn multi_thread_tail_update_test() -> GResult<()> {
         let temp_dir = TempDir::new()?;
-        let home_url: Url = UrlUtil::url_from_path(
-            temp_dir.path().join("test-file.bin").as_path(),
-        )?;
+        let home_url: Url =
+            UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?;
         // create meta segment in advance
         let mut first_conn = FakeStoreServiceConnector::default();
         let fake_props: &HashMap<String, String> = &HashMap::new();
@@ -360,8 +394,10 @@ mod tests {
                         FakeStoreServiceConnector::default(),
                     );
                     let props: &HashMap<String, String> = &HashMap::new();
-                    db_impl.store_connector.open(props).expect("open storage connector failed");
-
+                    db_impl
+                        .store_connector
+                        .open(props)
+                        .expect("open storage connector failed");
 
                     match db_impl.create_or_get_updated_tail(PLACEHOLDER_DATASEG_ID) {
                         Ok(create_res) => {
@@ -379,9 +415,7 @@ mod tests {
 
         handles
             .into_iter()
-            .for_each(|handle| {
-                handle.join().expect("join failure")
-            });
+            .for_each(|handle| handle.join().expect("join failure"));
 
         // assure only one thread has created the tail
         assert_eq!(global_tail_count.load(Ordering::SeqCst), 1);

@@ -47,7 +47,11 @@ impl MetaCache {
         self.tree_desc.clone()
     }
 
-    pub fn get_airlock_tracker(&mut self) -> &mut AirLockTracker {
+    pub fn get_airlock_tracker_mut(&mut self) -> &mut AirLockTracker {
         &mut self.airlock_tracker
+    }
+
+    pub fn get_airlock_tracker(&self) -> &AirLockTracker {
+        &self.airlock_tracker
     }
 }
