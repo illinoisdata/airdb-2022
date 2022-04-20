@@ -27,6 +27,7 @@ use crate::{
 pub type Key = Vec<u8>;
 pub type Value = Vec<u8>;
 
+
 pub struct DBFactory {}
 
 impl DBFactory {
@@ -66,9 +67,9 @@ pub trait RWDB {
 
     fn put_entries(&mut self, entries: Vec<Entry>) -> GResult<()>;
 
-    fn get(&mut self, key: Key) -> GResult<Option<Entry>>;
+    fn get(&mut self, key: &Key) -> GResult<Option<Entry>>;
 
-    fn get_from_snapshot(&mut self, snapshot: Snapshot, key: Key) -> GResult<Option<Entry>>;
+    fn get_from_snapshot(&mut self, snapshot: Snapshot, key: &Key) -> GResult<Option<Entry>>;
 
     fn delete(&mut self, key: Key) -> GResult<()>;
 
@@ -196,7 +197,7 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
         }
     }
 
-    fn get(&mut self, key: Key) -> GResult<Option<Entry>> {
+    fn get(&mut self, key: &Key) -> GResult<Option<Entry>> {
         let mut tail_props = self.try_get_tail_props_from_cache()?;
         while !tail_props.is_active_tail() {
             tail_props = self.try_get_tail_props_updated()?;
@@ -204,8 +205,8 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
         self.get_from_snapshot(self.gen_snapshot_from_cache(tail_props), key)
     }
 
-    fn get_from_snapshot(&mut self, snapshot: Snapshot, key: Key) -> GResult<Option<Entry>> {
-        snapshot.get_entry(&self.store_connector, &mut self.seg_manager, &key)
+    fn get_from_snapshot(&mut self, snapshot: Snapshot, key: &Key) -> GResult<Option<Entry>> {
+        snapshot.get_entry(&self.store_connector, &mut self.seg_manager, key)
     }
 
     fn close(&mut self) -> GResult<()> {

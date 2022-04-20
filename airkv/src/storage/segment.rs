@@ -154,13 +154,22 @@ impl Entry {
         }
     }
 
-    pub fn get_key(&self) -> &[u8] {
+    pub fn get_key_slice(&self) -> &[u8] {
         &self.key
     }
 
-    pub fn get_value(&self) -> &[u8] {
+    pub fn get_value_slice(&self) -> &[u8] {
         &self.value
     }
+
+    pub fn get_key(&self) -> &Vec<u8> {
+        &self.key
+    }
+
+    pub fn get_value(&self) -> &Vec<u8> {
+        &self.value
+    }
+
 }
 
 pub struct SegmentProps {

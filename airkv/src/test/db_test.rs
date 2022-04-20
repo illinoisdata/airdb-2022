@@ -2,6 +2,7 @@
 mod tests {
     use std::{
         collections::HashMap,
+        sync::{Arc, RwLock},
         thread::{self, JoinHandle},
         time::Instant,
     };
@@ -97,15 +98,13 @@ mod tests {
         // check the correctness of data by comparing with the sample
         sample_entries.iter().for_each(|entry| {
             let key = entry.get_key();
-            let target_value = entry.get_value();
+            let target_value = entry.get_value_slice();
             let current = Instant::now();
-            let search_value = db
-                .get(key.to_vec())
-                .expect("error found during searching the value");
+            let search_value = db.get(key).expect("error found during searching the value");
 
             query_time += current.elapsed().as_millis();
             assert!(search_value.is_some());
-            assert_eq!(target_value, search_value.unwrap().get_value());
+            assert_eq!(target_value, search_value.unwrap().get_value_slice());
         });
         println!(
             "avg query latency for get is {} ms",
@@ -175,15 +174,14 @@ mod tests {
                     // check the correctness of data by comparing with the sample
                     sample_entries.iter().for_each(|entry| {
                         let key = entry.get_key();
-                        let target_value = entry.get_value();
+                        let target_value = entry.get_value_slice();
                         let current = Instant::now();
-                        let search_value = db
-                            .get(key.to_vec())
-                            .expect("error found during searching the value");
+                        let search_value =
+                            db.get(key).expect("error found during searching the value");
 
                         query_time += current.elapsed().as_millis();
                         assert!(search_value.is_some());
-                        assert_eq!(target_value, search_value.unwrap().get_value());
+                        assert_eq!(target_value, search_value.unwrap().get_value_slice());
                     });
                     println!(
                         "Thread {:?}: avg query latency for get is {} ms",
@@ -203,7 +201,7 @@ mod tests {
     }
 
     // multiple WR clients: each client will call put() and get() in turn.
-    // each client should be able to read its own committed records
+    // read_your_write: each client should be able to read its own committed records
     #[test]
     fn read_committed_multi_client_test_1() -> GResult<()> {
         let temp_dir = TempDir::new()?;
@@ -242,12 +240,12 @@ mod tests {
 
                         let now = Instant::now();
                         let search_value = db
-                            .get(key_cp)
+                            .get(&key_cp)
                             .expect("error found during searching the value");
                         get_time += now.elapsed().as_millis();
 
                         assert!(search_value.is_some());
-                        assert_eq!(value_cp, search_value.unwrap().get_value());
+                        assert_eq!(value_cp, search_value.unwrap().get_value_slice());
                     });
 
                     println!(
@@ -272,10 +270,104 @@ mod tests {
         Ok(())
     }
 
-    // // multiple write clients, single read client
-    // // the read client should be able to read all committed records
-    // #[test]
-    // fn read_committed_multi_client_test_2() -> GResult<()> {
-    //     Ok(())
-    // }
+    // multiple write clients, multiple read clients
+    // read-all-committed: the read client should be able to read all committed records
+    #[test]
+    fn read_committed_multi_client_test_2() -> GResult<()> {
+        let temp_dir = TempDir::new()?;
+        let home: Url = UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?;
+        create_meta_segment(&home)?;
+        let latest_commit: Arc<RwLock<Vec<u8>>> = Arc::new(RwLock::new(vec![]));
+
+        // multiple clients write and read
+        let handles: Vec<JoinHandle<()>> = (0..10)
+            .map(|idx| {
+                let home_url = home.clone();
+                let latest_commit_clone = latest_commit.clone();
+                thread::spawn(move || {
+                    // when idx = 4 or 7, the threads will launch read clients
+                    // otherwise, launch write clients
+                    if idx != 4 && idx != 7 {
+                        // write client
+                        println!("write client {:?}: start ...", thread::current().id());
+                        // create db
+                        let mut db = DBFactory::new_rwdb(home_url, StorageType::RemoteFakeStore);
+                        let mut fake_props: HashMap<String, String> = HashMap::new();
+                        fake_props.insert("SEG_BLOCK_NUM_LIMIT".to_string(), "500".to_string());
+
+                        db.open(&fake_props).expect("db.open() failed");
+
+                        let mut rng = rand::thread_rng();
+
+                        let row_number: usize =
+                            db.get_props().get_seg_block_num_limit() as usize + 100;
+                        let mut put_time: u128 = 0;
+
+                        (0..row_number).for_each(|_i| {
+                            let mut random_part = vec![];
+                            random_part.extend(db.get_client_id().as_bytes());
+                            random_part.extend(gen_random_bytes(&mut rng, 10));
+                            let key = random_part;
+                            let key_clone = key.clone();
+                            let value = key.clone();
+
+                            let current = Instant::now();
+                            db.put(key, value).expect("put entry failure");
+                            put_time += current.elapsed().as_millis();
+                            let mut w = latest_commit_clone.write().unwrap();
+                            *w = key_clone;
+                        });
+
+                        println!(
+                            "Write client {:?}: avg query latency for put is {} ms",
+                            thread::current().id(),
+                            put_time as f64 / row_number as f64
+                        );
+                        db.close().expect("db close failed");
+                    } else {
+                        // read client
+                        println!("read client {:?}: start ...", thread::current().id());
+                        // create db
+                        let mut db = DBFactory::new_rwdb(home_url, StorageType::RemoteFakeStore);
+                        let mut fake_props: HashMap<String, String> = HashMap::new();
+                        fake_props.insert("SEG_BLOCK_NUM_LIMIT".to_string(), "500".to_string());
+
+                        db.open(&fake_props).expect("db.open() failed");
+
+                        let sample_size = 450;
+                        let mut get_time: u128 = 0;
+
+                        (0..sample_size).for_each(|_x| {
+                            let mut cur_key: Vec<u8> = vec![];
+                            while cur_key.is_empty() {
+                                let key = latest_commit_clone.read().unwrap();
+                                cur_key = (*key).clone();
+                            }
+                            let now = Instant::now();
+                            let search_value = db
+                                .get(&cur_key)
+                                .expect("error found during searching the value");
+                            get_time += now.elapsed().as_millis();
+
+                            assert!(search_value.is_some());
+                            assert_eq!(cur_key, search_value.unwrap().get_value_slice());
+                        });
+
+                        println!(
+                            "Read client {:?}: avg query latency for get is {} ms",
+                            thread::current().id(),
+                            get_time as f64 / sample_size as f64
+                        );
+
+                        db.close().expect("db close failed");
+                    }
+                })
+            })
+            .collect::<_>();
+
+        handles
+            .into_iter()
+            .for_each(|handle| handle.join().expect("join failure"));
+        Ok(())
+    }
 }

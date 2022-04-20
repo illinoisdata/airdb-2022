@@ -92,8 +92,8 @@ impl EntryAccess for DataSegment {
         for entry in entries {
             //in order to support backward read for tail/L0 segment
             // write in this order: value -> value length -> key -> key length
-            let value = entry.get_value();
-            let key = entry.get_key();
+            let value = entry.get_value_slice();
+            let key = entry.get_key_slice();
             buffer.write_bytes(value);
             buffer.write_u16(value.len() as u16);
             buffer.write_bytes(key);
@@ -110,8 +110,8 @@ impl EntryAccess for DataSegment {
     fn write_all_entries(&self, conn: &dyn StorageConnector, entries: Iter<Entry>) -> GResult<()> {
         let mut buffer = ByteBuffer::new();
         for entry in entries {
-            let value = entry.get_value();
-            let key = entry.get_key();
+            let value = entry.get_value_slice();
+            let key = entry.get_key_slice();
             buffer.write_u16(key.len() as u16);
             buffer.write_bytes(key);
             buffer.write_u16(value.len() as u16);
@@ -152,7 +152,7 @@ impl EntryAccess for DataSegment {
     fn search_entry(&mut self, conn: &dyn StorageConnector, key: &[u8]) -> GResult<Option<Entry>> {
         //TODO: use index to search
         let mut entries = self.read_all_entries(conn)?;
-        Ok(entries.find(|entry| entry.get_key() == key))
+        Ok(entries.find(|entry| entry.get_key_slice() == key))
     }
 
     fn search_entry_in_range(
@@ -163,7 +163,7 @@ impl EntryAccess for DataSegment {
     ) -> GResult<Option<Entry>> {
         //TODO: use index to search
         let mut entries = self.read_range_entries(conn, range)?;
-        Ok(entries.find(|entry| entry.get_key() == key))
+        Ok(entries.find(|entry| entry.get_key_slice() == key))
     }
 }
 
@@ -261,13 +261,13 @@ mod tests {
             // get target kv
             let target_entry = &data_entries[rand::thread_rng().gen_range(0..100)];
             // search kv
-            let search_entry_res = seg.search_entry(&first_conn, target_entry.get_key());
+            let search_entry_res = seg.search_entry(&first_conn, target_entry.get_key_slice());
             assert!(search_entry_res.is_ok());
             let search_entry_op = search_entry_res.unwrap();
             assert!(search_entry_op.is_some());
             let search_entry = search_entry_op.unwrap();
-            assert_eq!(target_entry.get_key(), search_entry.get_key());
-            assert_eq!(target_entry.get_value(), search_entry.get_value());
+            assert_eq!(target_entry.get_key_slice(), search_entry.get_key_slice());
+            assert_eq!(target_entry.get_value_slice(), search_entry.get_value_slice());
         });
 
         Ok(())
@@ -336,13 +336,13 @@ mod tests {
             // get target kv
             let target_entry = &data_entries[rand::thread_rng().gen_range(0..100)];
             // search kv
-            let search_entry_res = seg.search_entry(&first_conn, target_entry.get_key());
+            let search_entry_res = seg.search_entry(&first_conn, target_entry.get_key_slice());
             assert!(search_entry_res.is_ok());
             let search_entry_op = search_entry_res.unwrap();
             assert!(search_entry_op.is_some());
             let search_entry = search_entry_op.unwrap();
-            assert_eq!(target_entry.get_key(), search_entry.get_key());
-            assert_eq!(target_entry.get_value(), search_entry.get_value());
+            assert_eq!(target_entry.get_key_slice(), search_entry.get_key_slice());
+            assert_eq!(target_entry.get_value_slice(), search_entry.get_value_slice());
         });
 
         Ok(())
