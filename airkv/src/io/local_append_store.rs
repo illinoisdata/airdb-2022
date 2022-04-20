@@ -12,8 +12,19 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn new(path: Url, data: Vec<u8>) -> Self {
-        Self { path, data }
+    pub fn new(path_new: Url, data_new: Vec<u8>) -> Self {
+        Self {
+            path: path_new,
+            data: data_new,
+        }
+    }
+
+    pub fn get_path(&self) -> &str {
+        self.path.path()
+    }
+
+    pub fn get_content(&self) -> &[u8] {
+        &self.data
     }
 }
 

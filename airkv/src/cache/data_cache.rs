@@ -61,16 +61,16 @@ impl DataRange {
         self.range.end..other_range.end
     }
 
-    pub fn is_overlapping(&self, other: &DataRange) -> bool {
-        let ends_min = cmp::min(self.get_range().end, other.get_range().end);
-        let starts_max = cmp::max(self.get_range().start, other.get_range().start);
-        ends_min < starts_max
-    }
+    // pub fn is_overlapping(&self, other: &DataRange) -> bool {
+    //     let ends_min = cmp::min(self.get_range().end, other.get_range().end);
+    //     let starts_max = cmp::max(self.get_range().start, other.get_range().start);
+    //     ends_min < starts_max
+    // }
 
     pub fn is_overlapping_range(&self, other: &Range<u64>) -> bool {
         let ends_min = cmp::min(self.get_range().end, other.end);
         let starts_max = cmp::max(self.get_range().start, other.start);
-        ends_min < starts_max
+        ends_min > starts_max
     }
 
     pub fn append(&mut self, other: &mut DataRange) -> GResult<()> {

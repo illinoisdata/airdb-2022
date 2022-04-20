@@ -13,6 +13,9 @@ service FakeStoreService {
   rpc Remove (RemoveRequest) returns (RemoveResponse);
 
   rpc GetSize (GetSizeRequest) returns (GetSizeResponse);
+  rpc GetProps (GetPropsRequest) returns (GetPropsResponse);
+
+  rpc Seal (SealRequest) returns (SealResponse);
 
   rpc Append (AppendRequest) returns (AppendResponse);
   rpc ReadAll (ReadAllRequest) returns (ReadAllResponse);
@@ -46,6 +49,16 @@ message GetSizeResponse {
   required uint64 size = 1;
 }
 
+message GetPropsRequest {
+  required string path = 1;
+}
+message GetPropsResponse {
+  required uint64 seglen = 1;
+  required uint32 blocknum = 2;
+  required bool sealed = 3;
+}
+
+
 message CreateRequest {
   required string path = 1;
 }
@@ -53,12 +66,21 @@ message CreateResponse {
   required bool status = 1;
 }
 
+message SealRequest {
+  required string path = 1;
+}
+message SealResponse {
+  required bool status = 1;
+}
+
 message AppendRequest {
   required string path = 1;
   required bytes content = 2;
 }
+
 message AppendResponse {
-  required bool status = 1;
+  required uint32 status = 1;
+  required uint32 blocknum = 2;
 }
 
 message ReadAllRequest {

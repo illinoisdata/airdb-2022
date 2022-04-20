@@ -21,8 +21,8 @@ chrono = "0.4.19"
 tonic = "0.6"
 prost = "0.9"
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
-
-
+dashmap = "5.2.0"
+arrayvec = "0.7.2"
 
 [build-dependencies]
 tonic-build = "0.6"

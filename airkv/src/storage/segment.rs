@@ -1,5 +1,3 @@
-
-
 use url::Url;
 
 use crate::common::dataslice::DataSlice;
@@ -8,39 +6,88 @@ use crate::common::readbuffer::ReadBuffer;
 use crate::io::file_utils::Range;
 use crate::io::storage_connector::StorageConnector;
 
+use super::data_entry::AppendRes;
+use super::seg_util::SegIDUtil;
+
+// pub static SEG_BLOCK_NUM_LIMIT: u16 = 5000;
+// pub static mut SEG_BLOCK_NUM_LIMIT: u16 = 50000;
+
+pub type SegLen = u64;
+
+pub type BlockNum = u16;
+pub type SegSize = BlockNum;
+
 pub type SegID = u32;
+
 pub enum SegmentType {
-    MetaSegment,
-    TailSegment,
-    DataSegmentL0,
-    DataSegmentLn,
+    MetaSegment = 0,
+    DataSegmentL0 = 1,
+    DataSegmentLn = 2,
 }
 
 impl SegmentType {
     pub fn append_access_pattern(&self) -> bool {
-        matches!(self, Self::MetaSegment | Self::TailSegment | Self::DataSegmentL0)
+        matches!(
+            self,
+            Self::MetaSegment | Self::DataSegmentL0
+        )
     }
 
-    pub fn is_tail(&self) -> bool {
-        matches!(self, Self::TailSegment)
+    pub fn is_meta(&self) -> bool {
+        matches!(self, Self::MetaSegment)
     }
 
     pub fn is_data_seg(&self) -> bool {
         !matches!(self, Self::MetaSegment)
     }
+
+    pub fn try_from(v: u32) -> Self {
+        match v {
+            0 => SegmentType::MetaSegment,
+            1 => SegmentType::DataSegmentL0,
+            2 => SegmentType::DataSegmentLn,
+            default => panic!("unknown value for SegmentType {}", default),
+        }
+    }
 }
 
 pub struct SegmentInfo {
     seg_id: SegID,
-    seg_path: Url,
     level: u8,
+    seg_path: Url,
     seg_type: SegmentType,
 }
 
 impl SegmentInfo {
+    pub fn new(seg_id_new: SegID, home_dir: Url, level_new: u8, seg_type_new: SegmentType) -> Self {
+        Self {
+            seg_id: seg_id_new,
+            level: level_new,
+            seg_path: SegmentInfo::generate_dir(&home_dir, seg_id_new, level_new),
+            seg_type: seg_type_new,
+        }
+    }
 
-    pub fn new(seg_id_new: SegID, seg_path_new: Url, level_new: u8, seg_type_new: SegmentType) -> Self {
-        Self{seg_id: seg_id_new, seg_path: seg_path_new, level: level_new, seg_type: seg_type_new}
+    pub fn new_from_id(seg_id_new: SegID, home_dir: Url) -> Self {
+        if SegIDUtil::is_meta(seg_id_new) {
+            SegmentInfo::new_meta(home_dir)
+        } else {
+            SegmentInfo::new(
+                seg_id_new,
+                home_dir,
+                SegIDUtil::get_level(seg_id_new),
+                SegIDUtil::get_seg_type(seg_id_new),
+            )
+        }
+    }
+
+    pub fn new_meta(home_dir: Url) -> Self {
+        Self {
+            seg_id: 0,
+            seg_path: SegmentInfo::generate_dir(&home_dir, 0, 0),
+            level: 0,
+            seg_type: SegmentType::MetaSegment,
+        }
     }
 
     pub fn get_id(&self) -> SegID {
@@ -67,8 +114,26 @@ impl SegmentInfo {
         self.seg_type.is_data_seg()
     }
 
-    pub fn is_tail(&self) -> bool {
-        matches!(self.seg_type, SegmentType::TailSegment)
+    pub fn generate_dir(home_dir: &Url, seg_id: SegID, level: u8) -> Url {
+        if SegIDUtil::is_meta(seg_id) {
+            home_dir
+                .join(&format!("meta_{}", seg_id))
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "Cannot generate a path for home dir {}, seg id {}",
+                        home_dir, seg_id
+                    )
+                })
+        } else {
+            home_dir
+                .join(&format!("data{}_{}", level, seg_id))
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "Cannot generate a path for home dir {}, seg id {} and level {}",
+                        home_dir, seg_id, level
+                    )
+                })
+        }
     }
 }
 
@@ -89,62 +154,106 @@ impl Entry {
         }
     }
 
-    pub fn get_key(&self) -> &[u8] {
+    pub fn get_key_slice(&self) -> &[u8] {
         &self.key
     }
 
-    pub fn get_value(&self) -> &[u8] {
+    pub fn get_value_slice(&self) -> &[u8] {
         &self.value
+    }
+
+    pub fn get_key(&self) -> &Vec<u8> {
+        &self.key
+    }
+
+    pub fn get_value(&self) -> &Vec<u8> {
+        &self.value
+    }
+
+}
+
+pub struct SegmentProps {
+    len: SegLen,
+    block_num: BlockNum,
+    is_sealed: bool,
+}
+
+impl SegmentProps {
+    pub fn new(len_new: SegLen, block_num_new: BlockNum, is_sealed_new: bool) -> Self {
+        Self {
+            len: len_new,
+            block_num: block_num_new,
+            is_sealed: is_sealed_new,
+        }
+    }
+
+    pub fn get_seg_len(&self) -> SegLen {
+        self.len
+    }
+
+    pub fn get_block_num(&self) -> BlockNum {
+        self.block_num
+    }
+
+    pub fn is_sealed(&self) -> bool {
+        self.is_sealed
+    }
+
+    pub fn is_active_tail(&self) -> bool {
+        !self.is_sealed
     }
 }
 
-
-
 pub trait Segment {
-
-    fn get_connector(&self) -> &dyn StorageConnector;
-
     fn get_seginfo(&self) -> &SegmentInfo;
+
+    fn get_segid(&self) -> SegID {
+        self.get_seginfo().get_id()
+    }
 
     fn get_path(&self) -> &Url {
         self.get_seginfo().get_seg_path()
     }
 
-    fn get_size(&self) -> GResult<u64> {
-        self.get_connector().get_size(self.get_path())
+    fn get_size(&self, conn: &dyn StorageConnector) -> GResult<u64> {
+        conn.get_size(self.get_path())
     }
 
-    fn read_all(&mut self) -> GResult<DataSlice>; 
-
-    fn read_range(&mut self, range: &Range) -> GResult<DataSlice>; 
-
-    fn write_all(&self, data: &[u8]) -> GResult<()> {
-        self.get_connector().write_all(self.get_path(), data)
+    fn get_props(&self, conn: &dyn StorageConnector) -> GResult<SegmentProps> {
+        conn.get_props(self.get_path())
     }
 
-    fn append_all(&self, data: &[u8]) -> GResult<()> {
-        self.get_connector().append(self.get_path(), data)
+    fn seal(&self, conn: &dyn StorageConnector) -> GResult<()>;
+
+    fn read_all(&mut self, conn: &dyn StorageConnector) -> GResult<DataSlice>;
+
+    fn read_range(&mut self, conn: &dyn StorageConnector, range: &Range) -> GResult<DataSlice>;
+
+    fn write_all(&self, conn: &dyn StorageConnector, data: &[u8]) -> GResult<()> {
+        conn.write_all(self.get_path(), data)
     }
 
-    fn create(&self) -> GResult<()> {
+    fn append_all(&self, conn: &dyn StorageConnector, data: &[u8]) -> AppendRes<SegSize> {
+        conn.append(self.get_path(), data)
+    }
+
+    fn create(&self, conn: &dyn StorageConnector) -> GResult<()> {
         //TODO(L0): support different segment types
-        self.get_connector().create(self.get_path())
+        conn.create(self.get_path())
     }
 
-    fn delete_file(&self) -> GResult<()> {
-        self.get_connector().remove(self.get_path())
+    fn delete_file(&self, conn: &dyn StorageConnector) -> GResult<()> {
+        conn.remove(self.get_path())
     }
 }
 
-
-
-pub struct ReadEntryIterator { 
+pub struct ReadEntryIterator {
     buffer: Box<dyn ReadBuffer>,
 }
 
 impl ReadEntryIterator {
     pub fn new(buffer_new: Box<dyn ReadBuffer>) -> Self {
-        Self{buffer: buffer_new}
+        Self { buffer: buffer_new }
     }
 }
 
@@ -164,7 +273,6 @@ impl Iterator for ReadEntryIterator {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
 
@@ -172,12 +280,10 @@ mod tests {
 
     #[test]
     fn segment_type_test() -> GResult<()> {
-        assert!(SegmentType::TailSegment.append_access_pattern());
         assert!(SegmentType::DataSegmentL0.append_access_pattern());
         assert!(SegmentType::MetaSegment.append_access_pattern());
         assert!(!SegmentType::DataSegmentLn.append_access_pattern());
 
-       Ok(())
-
+        Ok(())
     }
 }

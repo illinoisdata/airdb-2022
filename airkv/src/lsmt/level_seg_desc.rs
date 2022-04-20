@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering};
 
 use crate::{
     common::{bytebuffer::ByteBuffer, error::GResult, readbuffer::ReadBuffer, serde::Serde},
@@ -7,9 +7,10 @@ use crate::{
 
 use super::tree_delta::{LevelDelta, TreeDelta};
 
-//TODO: change it into true default id
-static DEFAULT_SEGID: SegID = 0;
+pub static PLACEHOLDER_DATASEG_ID: SegID = 0;
 
+
+// SegDesc describes a data segment, it won't be used to describe the meta segment
 #[derive(Clone)]
 pub struct SegDesc {
     seg_id: SegID,
@@ -25,7 +26,7 @@ pub struct SegDesc {
 impl Default for SegDesc {
     fn default() -> Self {
         Self {
-            seg_id: DEFAULT_SEGID,
+            seg_id: PLACEHOLDER_DATASEG_ID,
             min: None,
             max: None,
         }
@@ -70,6 +71,14 @@ impl SegDesc {
             seg_id: id_new,
             min: min_new,
             max: max_new,
+        }
+    }
+
+    pub fn new_from_id(seg_id_new: SegID) -> Self {
+        Self {
+            seg_id: seg_id_new,
+            min: None,
+            max: None,
         }
     }
 
@@ -119,6 +128,7 @@ pub struct LevelSegDesc {
     /// The number of segments in the level.
     seg_num: u32,
     segs_desc: Vec<SegDesc>,
+    // segs_desc: BinaryHeap<SegDesc>
 }
 
 impl LevelSegDesc {
@@ -126,6 +136,7 @@ impl LevelSegDesc {
         Self {
             seg_num: seg_num_new,
             segs_desc: segs_desc_new,
+            // segs_desc: BinaryHeap::from(segs_desc_new),
         }
     }
 
@@ -137,11 +148,14 @@ impl LevelSegDesc {
         self.seg_num
     }
 
-    pub fn get_seg_ids(&self) -> Vec<SegID> {
-        self.segs_desc.iter().map(|x| x.get_id()).collect()
+    pub fn get_segs(&self) -> Vec<SegDesc> {
+        //TODO: find a optimized structure for segs_desc 
+        let mut segs = self.segs_desc.clone();
+        segs.sort_by(|a, b| b.cmp(a));
+        segs
     }
 
-    pub fn append_level_delta(&mut self, level_delta: &LevelDelta) -> GResult<()> {
+    pub fn append_level_delta(&mut self, level_delta: &LevelDelta) {
         // the level_delta denote a normal tree structure update
         if level_delta.is_add() {
             //TODO: optimize LevelSegDesc structure to better support tree search
@@ -152,20 +166,20 @@ impl LevelSegDesc {
         }
     }
 
-    fn append_segs(&mut self, segs: &[SegDesc]) -> GResult<()> {
+    fn append_segs(&mut self, segs: &[SegDesc]) {
+        // segs.iter().for_each(|seg|{self.segs_desc.push(*seg)});
         self.segs_desc.extend_from_slice(segs);
         self.seg_num = self.segs_desc.len() as u32;
-        Ok(())
     }
 
-    fn remove_segs(&mut self, segs: &[SegDesc]) -> GResult<()> {
+    fn remove_segs(&mut self, segs: &[SegDesc]) {
         // TODO(L0): optimize to speed up deletion and throw exception if target segs are not found in segs_desc
         self.segs_desc.retain(|x| !segs.contains(x));
         self.seg_num = self.segs_desc.len() as u32;
-        Ok(())
     }
 }
 
+//TODO: design a space-efficient way to clone or share the LsmTreeDesc
 #[derive(Clone, Default)]
 pub struct LsmTreeDesc {
     /// The number of levels in the LSM-Tree
@@ -195,8 +209,8 @@ impl LsmTreeDesc {
         }
     }
 
-    pub fn get_level_segs(&self, level: u8) -> Vec<SegID> {
-        self.levels_desc[level as usize].get_seg_ids()
+    pub fn has_tail(&self) -> bool {
+         self.tail_desc.get_id() != PLACEHOLDER_DATASEG_ID
     }
 
     pub fn get_level_num(&self) -> u8 {
@@ -211,28 +225,31 @@ impl LsmTreeDesc {
         &self.levels_desc[level as usize]
     }
 
-    pub fn append_tree_deltas(&mut self, tree_deltas: &[TreeDelta]) -> GResult<()> {
+    pub fn append_tree_deltas(&mut self, tree_deltas: Vec<TreeDelta>) {
         for tree_delta in tree_deltas.iter() {
-            for level_delta in tree_delta.get_levels_delta().iter() {
-                if level_delta.is_tail_update() {
-                    // the level_delta denote a tail update
-                    self.tail_desc = level_delta.get_segs()[0].clone();
+            self.append_tree_delta(tree_delta)
+        }
+    }
+
+    pub fn append_tree_delta(&mut self, tree_delta: &TreeDelta) {
+        for level_delta in tree_delta.get_levels_delta().iter() {
+            if level_delta.is_tail_update() {
+                // the level_delta denote a tail update
+                self.tail_desc = level_delta.get_segs()[0].clone();
+            } else {
+                let level = level_delta.get_level();
+                assert!(
+                    level < self.level_num || (level == self.level_num && level_delta.is_add())
+                );
+                if level == self.level_num {
+                    // add a new level
+                    self.levels_desc.push(level_delta.to_level_desc());
+                    self.level_num = self.levels_desc.len() as u8;
                 } else {
-                    let level = level_delta.get_level();
-                    assert!(
-                        level < self.level_num || (level == self.level_num && level_delta.is_add())
-                    );
-                    if level == self.level_num {
-                        // add a new level
-                        self.levels_desc.push(level_delta.to_level_desc());
-                        self.level_num = self.levels_desc.len() as u8;
-                    } else {
-                        // modify an existing level
-                        self.levels_desc[level as usize].append_level_delta(level_delta)?;
-                    }
+                    // modify an existing level
+                    self.levels_desc[level as usize].append_level_delta(level_delta);
                 }
             }
         }
-        Ok(())
     }
 }
