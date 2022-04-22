@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::Path,
@@ -12,6 +13,16 @@ use crate::common::error::{GResult, GenericError, UrlParseFilePathError};
 pub struct Range {
     pub offset: u64,
     pub length: u64,
+}
+
+impl fmt::Display for Range {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.reach_seg_end() {
+            write!(f, "bytes={}-", self.offset)
+        } else {
+            write!(f, "bytes={}-{}", self.offset, self.offset + self.length - 1)
+        }
+    }
 }
 
 impl Range {

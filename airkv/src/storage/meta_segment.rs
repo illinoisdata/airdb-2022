@@ -118,44 +118,52 @@ impl Meta for MetaSegment {
     fn refresh_meta(&mut self, conn: &dyn StorageConnector) -> GResult<()> {
         let last_pos = self.meta_cache.get_last_pos();
         let path = self.seg_info.get_seg_path();
-        let mut inc_buffer = ByteBuffer::wrap(conn.read_range(path, &Range::new(last_pos, 0))?);
-        let inc_size = inc_buffer.len();
+        if self.get_size(conn)? == last_pos {
+            // if meta length stays the same, skip refresh
+            Ok(())
+        } else {
+            // Otherwise, refresh the meta
+            let mut inc_buffer = ByteBuffer::wrap(conn.read_range(path, &Range::new(last_pos, 0))?);
+            let inc_size = inc_buffer.len();
 
-        while inc_buffer.has_remaining() {
-            let meta_append_type = inc_buffer.read_u8();
-            match meta_append_type {
-                x if x == MetaAppendType::LockReq as u8 => {
-                    let lock_req = AirLockRequest::deserialize(&mut inc_buffer);
-                    self.meta_cache.append_lock_req(lock_req);
-                }
-                y if y == MetaAppendType::CommitInfo as u8 => {
-                    let commit_info = CommitInfo::deserialize(&mut inc_buffer);
-                    // check if it is a valid commit
-                    if self
-                        .meta_cache
-                        .get_airlock_tracker_mut()
-                        .append_commit(&commit_info)
-                    {
-                        // append commit content
-                        self.meta_cache.append_tree_delta(commit_info.get_content());
+            while inc_buffer.has_remaining() {
+                let meta_append_type = inc_buffer.read_u8();
+                match meta_append_type {
+                    x if x == MetaAppendType::LockReq as u8 => {
+                        let lock_req = AirLockRequest::deserialize(&mut inc_buffer);
+                        self.meta_cache.append_lock_req(lock_req);
                     }
+                    y if y == MetaAppendType::CommitInfo as u8 => {
+                        let commit_info = CommitInfo::deserialize(&mut inc_buffer);
+                        // check if it is a valid commit
+                        if self
+                            .meta_cache
+                            .get_airlock_tracker_mut()
+                            .append_commit(&commit_info)
+                        {
+                            // append commit content
+                            self.meta_cache.append_tree_delta(commit_info.get_content());
+                        }
+                    }
+                    _ => panic!(
+                        "Unexpected meta_append_type {}, only support {} and {} ",
+                        meta_append_type,
+                        MetaAppendType::LockReq as u8,
+                        MetaAppendType::CommitInfo as u8
+                    ),
                 }
-                _ => panic!(
-                    "Unexpected meta_append_type {}, only support {} and {} ",
-                    meta_append_type,
-                    MetaAppendType::LockReq as u8,
-                    MetaAppendType::CommitInfo as u8
-                ),
             }
+            self.meta_cache.forward_last_seg_pos(inc_size as u64);
+            Ok(())
         }
-        self.meta_cache.forward_last_seg_pos(inc_size as u64);
-        Ok(())
     }
 
     fn check_commit(&mut self, conn: &dyn StorageConnector, lock_id: &AirLockID) -> bool {
         //refresh meta
         self.refresh_meta(conn).expect("failed to refresh meta");
-        self.meta_cache.get_airlock_tracker_mut().check_commit(lock_id)
+        self.meta_cache
+            .get_airlock_tracker_mut()
+            .check_commit(lock_id)
     }
 }
 
@@ -185,7 +193,6 @@ impl Segment for MetaSegment {
 mod tests {
     use std::collections::HashMap;
 
-    
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -203,7 +210,8 @@ mod tests {
         storage::{
             meta::Meta,
             meta_segment::MetaSegment,
-            segment::{SegID, SegmentInfo, SegmentType, Segment}, seg_util::{SegIDUtil, DATA_SEG_ID_MIN},
+            seg_util::{SegIDUtil, DATA_SEG_ID_MIN},
+            segment::{SegID, Segment, SegmentInfo, SegmentType},
         },
     };
 
@@ -253,7 +261,7 @@ mod tests {
         let new_tail_1 = SegDesc::new(new_tail_id + 1, None, None);
         let new_tail_id_1 = new_tail_1.get_id();
 
-        let new_lock_req_1= AirLockRequest::new(vec![new_tail_id_1], fake_client_id);
+        let new_lock_req_1 = AirLockRequest::new(vec![new_tail_id_1], fake_client_id);
         seg.append_lock_request(&first_conn, &new_lock_req_1)?;
         let commit_info_2 = CommitInfo::new(
             new_lock_req_1.get_lock_id(),
@@ -273,10 +281,8 @@ mod tests {
         let new_lock_req_2 = AirLockRequest::new(vec![first_tail_id, new_tail_id], fake_client_id);
         seg.append_lock_request(&first_conn, &new_lock_req_2)?;
 
-        let commit_info_3 = CommitInfo::new(
-            new_lock_req_2.get_lock_id(),
-            TreeDelta::new(levels_delta),
-        );
+        let commit_info_3 =
+            CommitInfo::new(new_lock_req_2.get_lock_id(), TreeDelta::new(levels_delta));
 
         seg.append_commit_info(&first_conn, commit_info_3)?;
         seg.refresh_meta(&first_conn)?;

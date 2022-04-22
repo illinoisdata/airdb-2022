@@ -10,7 +10,7 @@ use super::segment::{Entry, SegSize};
 pub enum AppendRes<SegSize> {
     Success(SegSize),
     BlockCountExceedFailure,
-    SegmentLengthExceedFailire,
+    SegmentLengthExceedFailure,
     AppendToSealedFailure,
     SegmentNotExsitFailure,
     UnknownFailure,
@@ -35,7 +35,7 @@ impl AppendRes<SegSize> {
         match self {
             AppendRes::Success(_) => 0u32,
             AppendRes::BlockCountExceedFailure => 1u32,
-            AppendRes::SegmentLengthExceedFailire => 2u32,
+            AppendRes::SegmentLengthExceedFailure => 2u32,
             AppendRes::AppendToSealedFailure => 3u32,
             AppendRes::SegmentNotExsitFailure => 4u32,
             AppendRes::UnknownFailure => 5u32,
@@ -46,11 +46,22 @@ impl AppendRes<SegSize> {
         match code {
             0u32 => AppendRes::Success(seg_size.unwrap()),
             1u32 => AppendRes::BlockCountExceedFailure,
-            2u32 => AppendRes::SegmentLengthExceedFailire,
+            2u32 => AppendRes::SegmentLengthExceedFailure,
             3u32 => AppendRes::AppendToSealedFailure,
             4u32 => AppendRes::SegmentNotExsitFailure,
             5u32 => AppendRes::UnknownFailure,
             default => panic!("unknown status code {}", default),
+        }
+    }
+
+    pub fn append_res_from_azure_error(error: &str) -> Self {
+        match error {
+            "BlobIsSealed" => AppendRes::AppendToSealedFailure,
+            "BlockCountExceedsLimit" => AppendRes::BlockCountExceedFailure,
+            // TODO: verify SegmentLengthExceedFailure
+            "ContentLengthLargerThanTierLimit" => AppendRes::SegmentLengthExceedFailure,
+            "BlobNotFound" => AppendRes::SegmentNotExsitFailure,
+            _ => AppendRes::<SegSize>::UnknownFailure,
         }
     }
 }
@@ -60,7 +71,7 @@ impl fmt::Display for AppendRes<SegSize> {
         match self {
             AppendRes::Success(x) => write!(f, "success with size {}", x),
             AppendRes::BlockCountExceedFailure => write!(f, "BlockCountExceedFailure"),
-            AppendRes::SegmentLengthExceedFailire => write!(f, "SegmentLengthExceedFailire"),
+            AppendRes::SegmentLengthExceedFailure => write!(f, "SegmentLengthExceedFailire"),
             AppendRes::AppendToSealedFailure => write!(f, "AppendToSealedFailure"),
             AppendRes::SegmentNotExsitFailure => write!(f, "SegmentNotExsitFailure"),
             AppendRes::UnknownFailure => write!(f, "UnknownFailure"),

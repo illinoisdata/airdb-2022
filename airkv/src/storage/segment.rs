@@ -172,6 +172,7 @@ impl Entry {
 
 }
 
+#[derive(Debug)]
 pub struct SegmentProps {
     len: SegLen,
     block_num: BlockNum,

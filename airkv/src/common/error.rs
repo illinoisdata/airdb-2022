@@ -27,6 +27,34 @@ unsafe impl Sync for UnknownServerError {}
 
 
 #[derive(Display, Debug, Clone)]
+pub struct MissingAzureAuthetication {
+  reason: String,
+}
+impl MissingAzureAuthetication {
+  pub fn boxed(reason: &str) -> GenericError {
+    Box::new(MissingAzureAuthetication { reason: reason.to_string() })
+  }
+}
+impl Error for MissingAzureAuthetication {}
+unsafe impl Send for MissingAzureAuthetication {}
+unsafe impl Sync for MissingAzureAuthetication {}
+
+
+#[derive(Display, Debug, Clone)]
+pub struct InvalidAzureStorageUrl {
+  reason: String,
+}
+impl InvalidAzureStorageUrl {
+  pub fn new(reason: &str) -> InvalidAzureStorageUrl {
+    InvalidAzureStorageUrl { reason: reason.to_string() }
+  }
+}
+impl Error for InvalidAzureStorageUrl {}
+unsafe impl Send for InvalidAzureStorageUrl {}
+unsafe impl Sync for InvalidAzureStorageUrl {}
+
+
+#[derive(Display, Debug, Clone)]
 pub struct AppendError {
     msg: String,
 }
