@@ -13,7 +13,7 @@ use crate::{
     io::{
         fake_store_service_conn::FakeStoreServiceConnector,
         local_storage_conn::LocalStorageConnector,
-        storage_connector::{StorageConnector, StorageType},
+        storage_connector::{StorageConnector, StorageType}, azure_conn::AzureConnector,
     },
     storage::{
         data_entry::{AppendRes, EntryAccess},
@@ -47,9 +47,9 @@ impl DBFactory {
             }
             StorageType::AzureStore => {
                 //TODO
-                Box::new(RWDBImpl::<LocalStorageConnector>::new_from_connector(
+                Box::new(RWDBImpl::<AzureConnector>::new_from_connector(
                     home_dir_new,
-                    LocalStorageConnector::default(),
+                    AzureConnector::default(),
                 ))
             }
         }
@@ -295,6 +295,7 @@ mod tests {
 
     use tempfile::TempDir;
     use url::Url;
+    use serial_test::serial;
 
     use crate::{
         common::error::GResult,
@@ -312,6 +313,7 @@ mod tests {
     };
 
     #[test]
+    #[serial]
     fn db_test() -> GResult<()> {
         let temp_dir = TempDir::new()?;
         let home_url: Url =
@@ -337,6 +339,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn tail_update_test() -> GResult<()> {
         let temp_dir = TempDir::new()?;
         let home_url: Url =
@@ -369,6 +372,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn multi_thread_tail_update_test() -> GResult<()> {
         let temp_dir = TempDir::new()?;
         let home_url: Url =

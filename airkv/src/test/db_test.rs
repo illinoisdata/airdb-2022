@@ -1,5 +1,7 @@
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
+
     use std::{
         collections::HashMap,
         sync::{Arc, RwLock},
@@ -16,8 +18,10 @@ mod tests {
         common::error::GResult,
         db::rw_db::DBFactory,
         io::{
+            azure_conn::AzureConnector,
             fake_store_service_conn::FakeStoreServiceConnector,
             file_utils::UrlUtil,
+            local_storage_conn::LocalStorageConnector,
             storage_connector::{StorageConnector, StorageType},
         },
         storage::{
@@ -26,17 +30,95 @@ mod tests {
         },
     };
 
+    #[test]
+    #[serial]
+    fn fake_store_single_client_test() -> GResult<()> {
+        db_single_client_test(StorageType::RemoteFakeStore)?;
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn fake_store_multi_client_test() -> GResult<()> {
+        db_multi_client_test(StorageType::RemoteFakeStore)?;
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn fake_store_read_committed_multi_client_test_1() -> GResult<()> {
+        read_committed_multi_client_test_1(StorageType::RemoteFakeStore)?;
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn fake_store_read_committed_multi_client_test_2() -> GResult<()> {
+        read_committed_multi_client_test_2(StorageType::RemoteFakeStore)?;
+        Ok(())
+    }
+
+    // #[test]
+    // #[serial]
+    // fn azure_single_client_test() -> GResult<()> {
+    //     db_single_client_test(StorageType::AzureStore)?;
+    //     Ok(())
+    // }
+
+    // #[test]
+    // #[serial]
+    // fn azure_multi_client_test() -> GResult<()> {
+    //     db_multi_client_test(StorageType::AzureStore)?;
+    //     Ok(())
+    // }
+
+    // #[test]
+    // #[serial]
+    // fn azure_read_committed_multi_client_test_1() -> GResult<()> {
+    //     read_committed_multi_client_test_1(StorageType::AzureStore)?;
+    //     Ok(())
+    // }
+
+    // #[test]
+    // #[serial]
+    // fn azure_read_committed_multi_client_test_2() -> GResult<()> {
+    //     read_committed_multi_client_test_2(StorageType::AzureStore)?;
+    //     Ok(())
+    // }
+
     // create meta segment in advance and return home directory
-    fn create_meta_segment(home_url: &Url) -> GResult<()> {
-        println!("home directory: {}", home_url.path());
+    fn create_meta_segment(home_url: &Url, store_type: StorageType) -> GResult<()> {
         // create meta segment
-        let mut first_conn = FakeStoreServiceConnector::default();
-        let fake_props: &HashMap<String, String> = &HashMap::new();
-        first_conn.open(fake_props)?;
-        // meta segment
-        let meta_url = SegmentInfo::generate_dir(home_url, META_SEG_ID, 0);
-        first_conn.create(&meta_url)?;
-        println!("meta directory: {}", meta_url.path());
+        println!("home directory: {}", home_url.path());
+        match store_type {
+            StorageType::LocalFakeStore => {
+                let mut first_conn = LocalStorageConnector::default();
+                let fake_props: &HashMap<String, String> = &HashMap::new();
+                first_conn.open(fake_props)?;
+                // meta segment
+                let meta_url = SegmentInfo::generate_dir(home_url, META_SEG_ID, 0);
+                first_conn.create(&meta_url)?;
+                println!("meta directory: {}", meta_url.path());
+            }
+            StorageType::RemoteFakeStore => {
+                let mut first_conn = FakeStoreServiceConnector::default();
+                let fake_props: &HashMap<String, String> = &HashMap::new();
+                first_conn.open(fake_props)?;
+                // meta segment
+                let meta_url = SegmentInfo::generate_dir(home_url, META_SEG_ID, 0);
+                first_conn.create(&meta_url)?;
+                println!("meta directory: {}", meta_url.path());
+            }
+            StorageType::AzureStore => {
+                let mut first_conn = AzureConnector::default();
+                let fake_props: &HashMap<String, String> = &HashMap::new();
+                first_conn.open(fake_props)?;
+                // meta segment
+                let meta_url = SegmentInfo::generate_dir(home_url, META_SEG_ID, 0);
+                first_conn.create(&meta_url)?;
+                println!("meta directory: {}", meta_url.path());
+            }
+        }
         Ok(())
     }
 
@@ -47,15 +129,23 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn db_single_client_test() -> GResult<()> {
-        let temp_dir = TempDir::new()?;
-        let home_url: Url =
-            UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?;
-        create_meta_segment(&home_url)?;
-
+    fn db_single_client_test(db_type: StorageType) -> GResult<()> {
+        let temp_dir: TempDir;
+        let home_url: Url;
+        match db_type {
+            StorageType::LocalFakeStore | StorageType::RemoteFakeStore => {
+                temp_dir = TempDir::new()?;
+                home_url = UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?;
+            }
+            StorageType::AzureStore => {
+                let test_path = format!("az:///{}/", "integration");
+                home_url = Url::parse(&test_path)?;
+            }
+        }
+        //create the meta segment in advance
+        create_meta_segment(&home_url, db_type)?;
         // create db
-        let mut db = DBFactory::new_rwdb(home_url, StorageType::RemoteFakeStore);
+        let mut db = DBFactory::new_rwdb(home_url, db_type);
         let mut fake_props: HashMap<String, String> = HashMap::new();
         fake_props.insert("SEG_BLOCK_NUM_LIMIT".to_string(), "500".to_string());
         db.open(&fake_props)?;
@@ -117,11 +207,11 @@ mod tests {
 
     // multiple clients
     // first writes some rows and then read the sample values to verify the correctness
-    #[test]
-    fn db_multi_client_test() -> GResult<()> {
+    fn db_multi_client_test(store_type: StorageType) -> GResult<()> {
         let temp_dir = TempDir::new()?;
         let home: Url = UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?;
-        create_meta_segment(&home)?;
+        //create the meta segment in advance
+        create_meta_segment(&home, store_type)?;
         // multiple clients write and read
         let handles: Vec<JoinHandle<()>> = (0..10)
             .map(|_x| {
@@ -129,7 +219,7 @@ mod tests {
                 thread::spawn(move || {
                     println!("client {:?}: start ...", thread::current().id());
                     // create db
-                    let mut db = DBFactory::new_rwdb(home_url, StorageType::RemoteFakeStore);
+                    let mut db = DBFactory::new_rwdb(home_url, store_type);
                     let mut fake_props: HashMap<String, String> = HashMap::new();
                     fake_props.insert("SEG_BLOCK_NUM_LIMIT".to_string(), "500".to_string());
 
@@ -200,13 +290,10 @@ mod tests {
         Ok(())
     }
 
-    // multiple WR clients: each client will call put() and get() in turn.
-    // read_your_write: each client should be able to read its own committed records
-    #[test]
-    fn read_committed_multi_client_test_1() -> GResult<()> {
+    fn read_committed_multi_client_test_1(store_type: StorageType) -> GResult<()> {
         let temp_dir = TempDir::new()?;
         let home: Url = UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?;
-        create_meta_segment(&home)?;
+        create_meta_segment(&home, store_type)?;
         // multiple clients write and read
         let handles: Vec<JoinHandle<()>> = (0..10)
             .map(|_x| {
@@ -214,7 +301,7 @@ mod tests {
                 thread::spawn(move || {
                     println!("client {:?}: start ...", thread::current().id());
                     // create db
-                    let mut db = DBFactory::new_rwdb(home_url, StorageType::RemoteFakeStore);
+                    let mut db = DBFactory::new_rwdb(home_url, store_type);
                     let mut fake_props: HashMap<String, String> = HashMap::new();
                     fake_props.insert("SEG_BLOCK_NUM_LIMIT".to_string(), "500".to_string());
 
@@ -272,11 +359,10 @@ mod tests {
 
     // multiple write clients, multiple read clients
     // read-all-committed: the read client should be able to read all committed records
-    #[test]
-    fn read_committed_multi_client_test_2() -> GResult<()> {
+    fn read_committed_multi_client_test_2(store_type: StorageType) -> GResult<()> {
         let temp_dir = TempDir::new()?;
         let home: Url = UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?;
-        create_meta_segment(&home)?;
+        create_meta_segment(&home, store_type)?;
         let latest_commit: Arc<RwLock<Vec<u8>>> = Arc::new(RwLock::new(vec![]));
 
         // multiple clients write and read
@@ -291,7 +377,7 @@ mod tests {
                         // write client
                         println!("write client {:?}: start ...", thread::current().id());
                         // create db
-                        let mut db = DBFactory::new_rwdb(home_url, StorageType::RemoteFakeStore);
+                        let mut db = DBFactory::new_rwdb(home_url, store_type);
                         let mut fake_props: HashMap<String, String> = HashMap::new();
                         fake_props.insert("SEG_BLOCK_NUM_LIMIT".to_string(), "500".to_string());
 
