@@ -21,7 +21,7 @@ impl StoreDesigner {
   pub fn design_for_kbs(&self, key_buffers: &[KeyBuffer], prefix_url: Url, store_name: String) -> Box<dyn DataStore> {
     match StoreDesigner::data_size_if_sized(key_buffers) {
       Some(data_size) => {
-        log::debug!("Using ArrayStore with data_size= {}", data_size);
+        log::trace!("Using ArrayStore with data_size= {}", data_size);
         Box::new(ArrayStore::new_sized(
           &self.storage,
           prefix_url,
@@ -31,7 +31,7 @@ impl StoreDesigner {
       },
       None => {
         let page_size = 36;
-        log::debug!("Using BlockStore with page_size= {}", page_size);
+        log::trace!("Using BlockStore with page_size= {}", page_size);
         Box::new(BlockStore::builder(store_name)
           .page_size(page_size)  // TODO: pick better page size?
           .build(&self.storage, prefix_url))

@@ -5,6 +5,7 @@ use crate::common::error::GResult;
 use crate::index::Index;
 use crate::index::IndexMeta;
 use crate::index::IndexMetaserde;
+use crate::index::LoadDistribution;
 use crate::index::PartialIndex;
 use crate::index::PartialIndexMeta;
 use crate::index::PartialIndexMetaserde;
@@ -58,6 +59,10 @@ impl Index for PiecewiseIndex {
     let reader = self.data_store.read_all()?;
     log::trace!("Received piecewise buffer");  // TEMP
     self.predict_from_reader(reader, key)
+  }
+
+  fn get_load(&self) -> Vec<LoadDistribution> {
+    self.model_serde.get_load()
   }
 }
 

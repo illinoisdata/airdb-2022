@@ -19,9 +19,23 @@ pub struct MultipleDrafter {
   use_parallel: bool,
 }
 
+impl Default for MultipleDrafter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MultipleDrafter {
+  pub fn new() -> MultipleDrafter {
+    MultipleDrafter::from(Vec::new())
+  }
+
   pub fn from(drafters: Vec<Box<dyn ModelDrafter>>) -> MultipleDrafter {
     MultipleDrafter{ drafters, use_parallel: true }
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.drafters.is_empty()
   }
 
   pub fn push(&mut self, drafter: Box<dyn ModelDrafter>) {

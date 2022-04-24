@@ -29,9 +29,9 @@ use airindex::io::storage::MmapAdaptor;
 use airindex::meta::Context;
 use airindex::meta;
 use airindex::model::band::BandMultipleDrafter;
-use airindex::model::linear::DoubleLinearMultipleDrafter;
 use airindex::model::ModelDrafter;
 use airindex::model::step::StepMultipleDrafter;
+use airindex::model::toolkit::MultipleDrafter;
 use airindex::store::array_store::ArrayStore;
 use airindex::store::key_position::KeyPositionCollection;
 
@@ -50,6 +50,9 @@ pub struct Cli {
   /// action: benchmark
   #[structopt(long)]
   do_benchmark: bool,
+  /// action: inspect index
+  #[structopt(long)]
+  do_inspect: bool,
 
   /// dataset name [blob]
   #[structopt(long)]
@@ -77,15 +80,30 @@ pub struct Cli {
   /// url to directory with index/db data
   #[structopt(long)]
   db_url: String,
-  /// index type [dlst, st, btree]
+  /// index builder type [bns, enb, btree]
   #[structopt(long)]
-  index_type: String,
+  index_builder: String,
+  /// index drafter types [step, band_greedy, band_equal]
+  #[structopt(long, use_delimiter = true)]
+  index_drafters: Vec<String>,
   /// manual storage profile's latency in nanoseconds (affine)
-  #[structopt(long)]
-  affine_latency_ns: Option<u64>,
+  #[structopt(long, default_value = "10000000.0")]  // 10 ms
+  affine_latency_ns: u64,
   /// manual storage profile's bandwidth in MB/s (affine)
+  #[structopt(long, default_value = "100.0")]  // 100 MB/s
+  affine_bandwidth_mbps: f64,
+  /// lowerbound to load hyperparameters
+  #[structopt(long, default_value = "256")]
+  low_load: usize,
+  /// upperbound to load hyperparameters
+  #[structopt(long, default_value = "1048576")]
+  high_load: usize,
+  /// exponentiation step for load hyperparameters
+  #[structopt(long, default_value = "2.0")]
+  step_load: f64,
+  /// target number of layers (enb index only)
   #[structopt(long)]
-  affine_bandwidth_mbps: Option<f64>,
+  target_layers: Option<usize>,
 
 
   /* For testing/debugging */
@@ -139,14 +157,13 @@ impl Experiment {
     // common external storage
     let es = Rc::new(RefCell::new(Experiment::load_io(args)?));
 
-    // create data context
+    // create context for sosd dataset
     let sosd_blob_url = Url::parse(&args.sosd_blob_url)?;
     let mut sosd_context = Context::new();
     sosd_context.put_storage(&es);
     sosd_context.put_store_prefix(&sosd_blob_url.join(".")?);
 
-
-    // create data context
+    // create data context for sosd rank db
     let db_url = Url::parse(&(args.db_url.clone() + "/"))?;  // enforce directory
     let mut db_context = Context::new();
     db_context.put_storage(&es);
@@ -180,7 +197,7 @@ impl Experiment {
     let aza = AzureStorageAdaptor::new_block();
     match aza {
       Ok(aza) => es = es.with("az".to_string(), Box::new(aza))?,
-      Err(e) => log::error!("Failed to initialize azure storage, {:?}", e),
+      Err(e) => log::warn!("Failed to initialize azure storage, {:?}", e),
     }
 
     Ok(es)
@@ -240,49 +257,35 @@ impl Experiment {
   }
 
   fn load_profile(&self, args: &Cli) -> Box<dyn StorageProfile> {
-    if args.affine_latency_ns.is_some() {
-      assert!(args.affine_bandwidth_mbps.is_some());
-      return Box::new(AffineStorageProfile::new(
-        Latency::from_nanos(args.affine_latency_ns.unwrap()),
-        Bandwidth::from_mbps(args.affine_bandwidth_mbps.unwrap())
-      ))
-    }
-    // Box::new(AffineStorageProfile::new(
-    //   Latency::from_micros(22),
-    //   Bandwidth::from_mbps(2500.0)
-    // ))  // ssd simplified
     Box::new(AffineStorageProfile::new(
-      Latency::from_millis(108),
-      Bandwidth::from_mbps(104.0)
-    ))  // nfs simplified
+      Latency::from_nanos(args.affine_latency_ns),
+      Bandwidth::from_mbps(args.affine_bandwidth_mbps)
+    ))
   }
 
   fn build_index_from_kps(&self, args: &Cli, data_kps: &KeyPositionCollection, profile: &dyn StorageProfile) -> GResult<Box<dyn Index>> {
     let model_drafter = self.make_drafter(args);
     let index_builder = self.make_index_builder(args, model_drafter, profile);
+    log::debug!("Building with {:?}", index_builder);
     let index = index_builder.build_index(data_kps)?;
     log::info!("Built index at {}: {:#?}", self.db_context.store_prefix.as_ref().unwrap().as_str(), index);
     Ok(index)
   }
 
   fn make_drafter(&self, args: &Cli) -> Box<dyn ModelDrafter> {
-    let model_drafter = match args.index_type.as_str() {
-      "dlst" | "enb-dlst" => {
-        StepMultipleDrafter::exponentiation(256, 1_048_576, 2.0, 16)
-          .extend(DoubleLinearMultipleDrafter::exponentiation(256, 1_048_576, 2.0))
-      },
-      "st" | "enb-st" => {
-        StepMultipleDrafter::exponentiation(256, 1_048_576, 2.0, 16)
-      },
-      "stb" | "enb-stb" => {
-        StepMultipleDrafter::exponentiation(256, 1_048_576, 2.0, 16)
-          .extend(BandMultipleDrafter::greedy_exponentiation(256, 1_048_576, 2.0))
-          .extend(BandMultipleDrafter::equal_exponentiation(256, 1_048_576, 2.0))
-      },
-      "btree" => {
-        StepMultipleDrafter::exponentiation(4096, 4096, 2.0, 255)
-      },
-      _ => panic!("Invalid sosd dtype \"{}\"", args.sosd_dtype),
+    let low_load = args.low_load;
+    let high_load = args.high_load;
+    let step_load = args.step_load;
+    let mut model_drafter = MultipleDrafter::new();
+    for index_drafter in &args.index_drafters {
+      let sub_drafter = match index_drafter.as_str() {
+        "step" => StepMultipleDrafter::exponentiation(low_load, high_load, step_load, 16),
+        "band_greedy" => BandMultipleDrafter::greedy_exp(low_load, high_load, step_load),
+        "band_equal" => BandMultipleDrafter::equal_exp(low_load, high_load, step_load),
+        "btree" => StepMultipleDrafter::exponentiation(4096, 4096, 2.0, 255),
+        _ => panic!("Invalid index_drafter= {}", index_drafter),
+      };
+      model_drafter = model_drafter.extend(sub_drafter);
     };
 
     // serial or parallel drafting
@@ -295,8 +298,8 @@ impl Experiment {
   }
 
   fn make_index_builder<'a>(&'a self, args: &Cli, model_drafter: Box<dyn ModelDrafter>, profile: &'a (dyn StorageProfile + 'a)) -> Box<dyn IndexBuilder + 'a> {
-    match args.index_type.as_str() {
-      "dlst" | "st" | "stb" => {
+    match args.index_builder.as_str() {
+      "bns" => {
         Box::new(BalanceStackIndexBuilder::new(
           self.db_context.storage.as_ref().unwrap(),
           model_drafter,
@@ -304,12 +307,22 @@ impl Experiment {
           self.db_context.store_prefix.as_ref().unwrap().clone(),
         ))
       },
-      "enb-dlst" | "enb-st" | "enb-stb" => {
+      "enb" => {
         Box::new(ExploreStackIndexBuilder::new(
           self.db_context.storage.as_ref().unwrap(),
           model_drafter,
           profile,
           self.db_context.store_prefix.as_ref().unwrap().clone(),
+        ))
+      },
+      "enb_layers" => {
+        let target_layers = args.target_layers.expect("enb_layer requires target_layers");
+        Box::new(ExploreStackIndexBuilder::exact_layers(
+          self.db_context.storage.as_ref().unwrap(),
+          model_drafter,
+          profile,
+          self.db_context.store_prefix.as_ref().unwrap().clone(),
+          target_layers,
         ))
       },
       "btree" => {
@@ -321,7 +334,7 @@ impl Experiment {
           self.db_context.store_prefix.as_ref().unwrap().clone(),
         ))
       },
-      _ => panic!("Invalid index type \"{}\"", args.index_type),
+      _ => panic!("Invalid index type \"{}\"", args.index_builder),
     }
   }
 
@@ -385,6 +398,21 @@ impl Experiment {
     Ok((time_measures, query_counts))
   }
 
+  pub fn inspect(&self) -> GResult<()> {
+    let sosd_db = self.reload()?;
+    let load = sosd_db.get_load();
+    let sum_load: f64 = load.iter().map(|ld| ld.average()).sum();
+    log::debug!("Index structure {:#?}", sosd_db);
+    log::debug!("Load {:#?}", load);
+    log::info!(
+      "prefix, num_layers, sum_load: {:?}, {}, {}",
+      self.db_context.store_prefix.as_ref().unwrap().to_string(),
+      load.len(),
+      sum_load,
+    );
+    Ok(())
+  }
+
   fn reload(&self) -> GResult<SOSDRankDB> {
     let meta_bytes = self.db_context.storage.as_ref().unwrap()
       .borrow()
@@ -421,17 +449,18 @@ fn main_guarded() -> GResult<()> {
   }
 
   // run benchmark
-  let (time_measures, query_counts) = if args.do_benchmark {
+  if args.do_benchmark {
     let (time_measures, query_counts) = exp.benchmark(&args)?;
     log::info!("Collected {} measurements", time_measures.len()); 
     assert_eq!(time_measures.len(), query_counts.len());
-    (time_measures, query_counts)
-  } else {
-    (Vec::new(), Vec::new())
-  };
+    log_result(&args, &time_measures, &query_counts)?;
+  }
 
-  // write results to log
-  log_result(&args, &time_measures, &query_counts)?;
+  // inspect
+  if args.do_inspect {
+    exp.inspect()?;
+  }
+
   Ok(())
 }
 

@@ -84,11 +84,15 @@ impl ArrayStore {
   }
 
   pub fn read_array_all(&self) -> GResult<ArrayStoreReader> {
-    self.read_array_within(0, self.state.length * self.state.data_size)
+    self.read_array_within(0, self.read_all_size())
   }
 
   pub fn data_size(&self) -> usize {
     self.state.data_size
+  }
+
+  pub fn read_all_size(&self) -> usize {
+    self.state.length * self.state.data_size
   }
 
   fn end_write(&mut self, written_elements: usize) {

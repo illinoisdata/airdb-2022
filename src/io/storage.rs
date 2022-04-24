@@ -602,7 +602,6 @@ pub mod adaptor_test {
 mod tests {
   use super::*;
   use tempfile::TempDir;
-  use test_log::test;
 
   use crate::io::storage::adaptor_test::fsa_resources_setup;
   use crate::io::storage::adaptor_test::fsa_tempdir_setup;

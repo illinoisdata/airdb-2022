@@ -43,6 +43,10 @@ SOSD_BLOBS=(
   "gmm_k100 800 uint64"
 )
 
+# SOSD_BLOBS=(
+#   "fb 1 uint64"  # for debugging
+# )
+
 mkdir -p ${KEYSET_ROOT}
 for ((i = 0; i < ${#SOSD_BLOBS[@]}; i++)) do
   for ((j = 0; j < ${NUM_SET}; j++)) do
