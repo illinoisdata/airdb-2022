@@ -7,9 +7,13 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::time::Instant;
 use structopt::StructOpt;
+use tracing::Dispatch;
+use tracing_timing::Builder;
+use tracing_timing::Histogram;
 use url::Url;
 
 use airindex::common::error::GResult;
+use airindex::db::key_rank::KeyRank;
 use airindex::db::key_rank::read_keyset;
 use airindex::db::key_rank::SOSDRankDB;
 use airindex::index::hierarchical::BalanceStackIndexBuilder;
@@ -53,6 +57,9 @@ pub struct Cli {
   /// action: inspect index
   #[structopt(long)]
   do_inspect: bool,
+  /// action: breakdown latency
+  #[structopt(long)]
+  do_breakdown: bool,
 
   /// dataset name [blob]
   #[structopt(long)]
@@ -127,6 +134,13 @@ pub struct BenchmarkResult<'a> {
   setting: &'a Cli,
   time_measures: &'a [u128],
   query_counts: &'a [usize],
+}
+
+#[derive(Serialize)]
+pub struct BreakdownResult<'a> {
+  setting: &'a Cli,
+  event_names: &'a [String],
+  time_measures: &'a [u128],
 }
 
 
@@ -353,17 +367,14 @@ impl Experiment {
 
   // TODO: multiple time?
 
-  pub fn benchmark(&self, args: &Cli) -> GResult<(Vec<u128>, Vec<usize>)> {
-    // read keyset
-    let keyset_bytes = self.storage.borrow().read_all(&self.keyset_url)?;
-    let test_keyset = read_keyset(&keyset_bytes[..])?;
+  pub fn benchmark(&self, args: &Cli, test_keyset: Vec<KeyRank>) -> GResult<(Vec<u128>, Vec<usize>)> {
+    // select keyset
     let num_samples = match args.num_samples {
       Some(num_samples) => num_samples,
       None => test_keyset.len(),
     };
 
-    // start the clock and begin db/index reconstruction
-    log::debug!("Starting the benchmark");
+    // start the clock
     let mut time_measures = Vec::new();
     let mut query_counts = Vec::new();
     let mut last_count_milestone = 0;
@@ -371,7 +382,12 @@ impl Experiment {
     let mut last_elasped = Duration::ZERO;
     let freq_mul: f64 = 1.1;
     let start_time = Instant::now();
+    tracing::trace!("sosd_setup");
+    log::debug!("Benchmark started");
+
+    // reload data structure
     let sosd_db = self.reload()?;
+    tracing::trace!("sosd_reload");
     log::debug!("Reloaded rank db");
     for (idx, test_kr) in test_keyset.iter().enumerate().take(num_samples) {
       let rcv_kr = sosd_db.rank_of(test_kr.key)?
@@ -383,16 +399,17 @@ impl Experiment {
         time_measures.push(time_elapsed.as_nanos());
         query_counts.push(count_processed);
         log::info!(
-            "t= {:>9.2?}: {:7} counts, tot {:>9.2?}/op, seg {:>9.2?}/op",
-            time_elapsed,
-            count_processed,
-            time_elapsed / count_processed.try_into().unwrap(),
-            (time_elapsed - last_elasped) / (count_processed - last_count_milestone).try_into().unwrap() 
+          "t= {:>9.2?}: {:7} counts, tot {:>9.2?}/op, seg {:>9.2?}/op",
+          time_elapsed,
+          count_processed,
+          time_elapsed / count_processed.try_into().unwrap(),
+          (time_elapsed - last_elasped) / (count_processed - last_count_milestone).try_into().unwrap() 
         );
         last_elasped = time_elapsed;
         last_count_milestone = count_processed;
         count_milestone = (count_milestone as f64 * freq_mul).ceil() as usize;
       }
+      tracing::trace!("complete_query");
     }
     log::info!("Benchmarked {:#?}", sosd_db);
     Ok((time_measures, query_counts))
@@ -413,12 +430,73 @@ impl Experiment {
     Ok(())
   }
 
+  pub fn breakdown(&self, args: &Cli) -> GResult<(Vec<String>, Vec<u128>)> {
+    // setup timing subscriber
+    let timing_subscriber = Builder::default()
+      .build(|| Histogram::new_with_max(10_000_000_000, 2).unwrap());
+    let downcaster = timing_subscriber.downcaster();
+    let dispatch = Dispatch::new(timing_subscriber);
+
+    // do the benchmark
+    let test_keyset = self.load_keyset()?;
+    tracing::dispatcher::with_default(&dispatch, || {
+      tracing::trace_span!("benchmark").in_scope(|| {
+        self.benchmark(args, test_keyset)
+      })
+    })?;
+
+    // inspect the measurements
+    let mut event_names = Vec::new();
+    let mut time_measures = Vec::new();
+    let mut checksum = Duration::ZERO;
+    let sub = downcaster.downcast(&dispatch).unwrap();
+    sub.force_synchronize();
+    sub.with_histograms(|hs| {
+      for (span_group, hs) in hs {
+        for (event_group, h) in hs {
+          h.refresh();
+          let sum = Duration::from_nanos((h.mean() * h.len() as f64) as u64);
+          let mean = Duration::from_nanos(h.mean() as u64);
+          let p50 = Duration::from_nanos(h.value_at_quantile(0.5));
+          let min = Duration::from_nanos(h.min());
+          let max = Duration::from_nanos(h.max());
+          let count = h.len();
+          let stdev = Duration::from_nanos(h.stdev() as u64);
+          println!(
+            "{} -> {:22}: sum= {:>9.2?}, mean= {:>9.2?}, p50= {:>9.2?}, min= {:>9.2?}, max= {:>9.2?}, count= {:>9.2?}, stdev= {:>9.2?}",
+            span_group,
+            event_group,
+            sum,
+            mean,
+            p50,
+            min,
+            max,
+            count,
+            stdev,
+          );
+          event_names.push(event_group.clone());
+          time_measures.push(sum.as_nanos());
+          checksum += sum;
+        }
+      }
+    });
+    println!("checksum: {:>9.2?}", checksum);
+    Ok((event_names, time_measures))
+  }
+
+  fn load_keyset(&self) -> GResult<Vec<KeyRank>> {
+    let keyset_bytes = self.storage.borrow().read_all(&self.keyset_url)?;
+    read_keyset(&keyset_bytes[..])
+  }
+
   fn reload(&self) -> GResult<SOSDRankDB> {
     let meta_bytes = self.db_context.storage.as_ref().unwrap()
       .borrow()
       .read_all(&self.db_meta()?)?;
+    tracing::trace!("sosd_readmeta");
     log::trace!("Loaded metadata of {} bytes", meta_bytes.len());
     let meta = meta::deserialize(&meta_bytes[..])?;
+    tracing::trace!("sosd_deserialize");
     log::trace!("Deserialized metadata");
     SOSDRankDB::from_meta(meta, &self.sosd_context, &self.db_context)
   }
@@ -450,15 +528,24 @@ fn main_guarded() -> GResult<()> {
 
   // run benchmark
   if args.do_benchmark {
-    let (time_measures, query_counts) = exp.benchmark(&args)?;
+    let test_keyset = exp.load_keyset()?;
+    let (time_measures, query_counts) = exp.benchmark(&args, test_keyset)?;
     log::info!("Collected {} measurements", time_measures.len()); 
     assert_eq!(time_measures.len(), query_counts.len());
     log_result(&args, &time_measures, &query_counts)?;
-  }
+  };
 
   // inspect
   if args.do_inspect {
     exp.inspect()?;
+  }
+
+  // trace for latency breakdown
+  if args.do_breakdown {
+    let (event_names, time_measures) = exp.breakdown(&args)?;
+    log::info!("Collected {} measurements", time_measures.len()); 
+    assert_eq!(event_names.len(), time_measures.len());
+    log_result_breakdown(&args, &event_names, &time_measures)?;
   }
 
   Ok(())
@@ -471,8 +558,20 @@ fn log_result(args: &Cli, time_measures: &[u128], query_counts: &[usize]) -> GRe
     time_measures,
     query_counts,
   })?;
+  write_json(args, result_json)
+}
 
-  // write appending 
+fn log_result_breakdown(args: &Cli, event_names: &[String], time_measures: &[u128]) -> GResult<()> {
+  // compose json result
+  let result_json = serde_json::to_string(&BreakdownResult {
+    setting: args,
+    event_names,
+    time_measures,
+  })?;
+  write_json(args, result_json)
+}
+
+fn write_json(args: &Cli, result_json: String) -> GResult<()> {
   let mut log_file = OpenOptions::new()
     .create(true)
     .write(true)
@@ -481,7 +580,6 @@ fn log_result(args: &Cli, time_measures: &[u128], query_counts: &[usize]) -> GRe
   log_file.write_all(result_json.as_bytes())?;
   log_file.write_all(b"\n")?;
   log::info!("Log result {} characters to {}", result_json.len(), args.out_path.as_str());
-
   Ok(())
 }
 

@@ -296,7 +296,9 @@ impl<'a> ExploreStackIndexBuilder<'a> {
 
     if self.should_build(&no_index_cost, &ideal_index_cost, layer_idx) {
       let mut maybe_drafts = None;
-      for model_draft in self.drafter.draft_many(kps, self.profile).into_iter() {
+      let mut drafts = self.drafter.draft_many(kps, self.profile);
+      drafts.sort_by_key(|draft| draft.cost);
+      for model_draft in drafts.into_iter().take(5) {
         // calculate cost at this layer
         let current_loads = self.summarize_loads(&model_draft.serde.get_load());
         let current_costs = self.profile.sequential_cost(&current_loads);

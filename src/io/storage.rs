@@ -80,7 +80,10 @@ pub trait Adaptor: std::fmt::Debug {
 fn open_rfile(url: &Url) -> GResult<File> {
   assert!(url.scheme() == "file" || url.scheme() == "mmap");
   match OpenOptions::new().read(true).open(url.path()) {
-    Ok(file) => Ok(file),
+    Ok(file) => {
+      tracing::trace!("storage_openfile");
+      Ok(file)
+    },
     Err(e) => Err(OpenUrlError::boxed(url.to_string(), e.to_string())),
   }
 }
@@ -115,6 +118,7 @@ impl FileSystemAdaptor {
         break;
       }
     }
+    tracing::trace!("storage_readrange");
     Ok(())
   }
 

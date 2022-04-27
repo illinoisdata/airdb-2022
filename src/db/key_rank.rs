@@ -57,9 +57,12 @@ impl SOSDRankDB {
       .as_ref()
       .expect("Index missing, trying to accessing empty data store")
       .predict(&key)?;
+    tracing::trace!("keyrank_index");
     let reader = self.array_store.read_array_within(kpr.offset, kpr.length)?;
+    tracing::trace!("keyrank_buffer");
     log::trace!("received rank buffer in {:?}", kpr);
     let (kb, rank) = reader.first_of_with_rank(key)?;
+    tracing::trace!("keyrank_find");
     if kb.key == key {
       Ok(Some(KeyRank{ key: kb.key, rank }))
     } else {
