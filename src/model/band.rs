@@ -368,6 +368,19 @@ impl ModelRecon for BandModelRecon {
   fn get_load(&self) -> Vec<LoadDistribution> {
     vec![self.load.clone()]
   }
+
+  fn combine_with(&mut self, other: &dyn ModelRecon) {
+    match other.to_typed() {
+      ModelReconMeta::Band { meta } => {
+        self.load.extend(&meta.load);
+      },
+      _ => panic!("Cannot combine StepModelRecon with this {:?}", other),
+    }
+  }
+
+  fn to_typed(&self) -> ModelReconMeta {
+    ModelReconMeta::Band { meta: Box::new(self.clone()) }
+  }
 }
 
 impl ModelReconMetaserde for BandModelRecon {  // for Metaserde

@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 use std::ops::Index;
 use std::slice::Chunks;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /*
  * Structures around byte array
@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 #[derive(Serialize, Deserialize)]
 pub struct SharedBytes {
-  buffer: Rc<Vec<u8>>,
+  buffer: Arc<Vec<u8>>,
 }
 
 impl SharedBytes {
@@ -30,7 +30,7 @@ impl SharedBytes {
 
   pub fn slice(&self, offset: usize, length: usize) -> SharedByteSlice {
     SharedByteSlice {
-      buffer: Rc::clone(&self.buffer),
+      buffer: Arc::clone(&self.buffer),
       offset,
       length,
     }
@@ -38,7 +38,7 @@ impl SharedBytes {
 
   pub fn slice_all(&self) -> SharedByteSlice {
     SharedByteSlice {
-      buffer: Rc::clone(&self.buffer),
+      buffer: Arc::clone(&self.buffer),
       offset: 0,
       length: self.len(),
     }
@@ -47,7 +47,7 @@ impl SharedBytes {
 
 impl Clone for SharedBytes {
   fn clone(&self) -> Self {
-    SharedBytes { buffer: Rc::clone(&self.buffer) }
+    SharedBytes { buffer: Arc::clone(&self.buffer) }
   }
 }
 
@@ -59,15 +59,15 @@ impl<Idx: std::slice::SliceIndex<[u8]>> Index<Idx> for SharedBytes {
   }
 }
 
-impl From<Rc<Vec<u8>>> for SharedBytes {
-  fn from(buffer: Rc<Vec<u8>>) -> Self {
+impl From<Arc<Vec<u8>>> for SharedBytes {
+  fn from(buffer: Arc<Vec<u8>>) -> Self {
     SharedBytes { buffer }
   }
 }
 
 impl From<Vec<u8>> for SharedBytes {
   fn from(buffer: Vec<u8>) -> Self {
-    SharedBytes { buffer: Rc::new(buffer) }
+    SharedBytes { buffer: Arc::new(buffer) }
   }
 }
 
@@ -76,7 +76,7 @@ impl From<Vec<u8>> for SharedBytes {
 
 #[derive(Clone)]
 pub struct SharedByteSlice {
-  buffer: Rc<Vec<u8>>,
+  buffer: Arc<Vec<u8>>,
   offset: usize,
   length: usize,
 }
@@ -93,7 +93,7 @@ impl SharedByteSlice {
   pub fn slice(&self, offset: usize, length: usize) -> SharedByteSlice {
     assert!(offset + length <= self.length);
     SharedByteSlice {
-      buffer: Rc::clone(&self.buffer),
+      buffer: Arc::clone(&self.buffer),
       offset: self.offset + offset,
       length,
     }

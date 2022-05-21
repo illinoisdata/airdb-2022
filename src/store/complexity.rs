@@ -69,6 +69,6 @@ mod tests {
       Bandwidth::from_mbps(20.0)
     )) as Box<dyn StorageProfile>;
     assert_measure(StepComplexity::measure(profile.as_ref(), 320_000), vec![320_000], &profile);
-    assert_measure(StepComplexity::measure(profile.as_ref(), 32_000_000), vec![32_000, 32_000], &profile);
+    assert_measure(StepComplexity::measure(profile.as_ref(), 32_000_000), vec![22_640, 22_627], &profile);
   }
 }

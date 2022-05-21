@@ -229,6 +229,17 @@ impl KeyPositionCollection {
   pub fn range_iter(&self) -> KeyPositionRangeIterator {
     KeyPositionRangeIterator::new(self)
   }
+
+  pub fn range_slice_iter(&self, range: std::ops::Range<usize>) -> KeyPositionRangeIterator {
+    KeyPositionRangeIterator::slice(self, range.start, range.end)
+  }
+
+  pub fn chunk_iter(&self, chunk_size: usize) -> Vec<KeyPositionRangeIterator> {
+    let num_chunks = self.len() / chunk_size + (self.len() % chunk_size != 0) as usize;
+    (0 .. num_chunks).map(|chunk_idx| {
+      self.range_slice_iter(chunk_idx * chunk_size .. (chunk_idx + 1) * chunk_size)
+    }).collect()
+  }
 }
 
 impl Index<usize> for KeyPositionCollection {
@@ -243,11 +254,20 @@ impl Index<usize> for KeyPositionCollection {
 pub struct KeyPositionRangeIterator<'a> {
   kps: &'a KeyPositionCollection,
   current_idx: usize,
+  upper_idx: usize,
 }
 
 impl<'a> KeyPositionRangeIterator<'a> {
   fn new(kps: &'a KeyPositionCollection) -> KeyPositionRangeIterator {
-    KeyPositionRangeIterator{ kps, current_idx: 0 }
+    KeyPositionRangeIterator::slice(kps, 0, kps.len())
+  }
+
+  fn slice(kps: &'a KeyPositionCollection, start: usize, end: usize) -> KeyPositionRangeIterator {
+    KeyPositionRangeIterator{
+      kps,
+      current_idx: start,
+      upper_idx: end,
+    }
   }
 }
 
@@ -255,12 +275,16 @@ impl<'a> Iterator for KeyPositionRangeIterator<'a> {
   type Item = KeyPositionRange;
 
   fn next(&mut self) -> Option<Self::Item> {
-    match self.kps.range_at(self.current_idx) {
-      Ok(kr) => {
-        self.current_idx += 1;
-        Some(kr)
-      },
-      Err(_) => None,
+    if self.current_idx < self.upper_idx {
+      match self.kps.range_at(self.current_idx) {
+        Ok(kr) => {
+          self.current_idx += 1;
+          Some(kr)
+        },
+        Err(_) => None,
+      } 
+    } else {
+      None
     }
   }
 }

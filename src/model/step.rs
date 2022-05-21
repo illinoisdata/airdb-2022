@@ -162,6 +162,20 @@ impl ModelRecon for StepModelRecon {
   fn get_load(&self) -> Vec<LoadDistribution> {
     vec![self.load.clone()]
   }
+
+  fn combine_with(&mut self, other: &dyn ModelRecon) {
+    match other.to_typed() {
+      ModelReconMeta::Step { meta } => {
+        self.load.extend(&meta.load);
+      },
+      _ => panic!("Cannot combine StepModelRecon with this {:?}", other),
+    }
+  }
+
+  fn to_typed(&self) -> ModelReconMeta {
+    // TODO: downcast directly without meta enum?
+    ModelReconMeta::Step { meta: Box::new(self.clone()) }
+  }
 }
 
 

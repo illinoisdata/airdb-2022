@@ -2,13 +2,16 @@ use rayon::prelude::*;
 
 use crate::model::BuilderFinalReport;
 use crate::model::GResult;
+use crate::model::KeyBuffer;
 use crate::model::KeyPositionCollection;
 use crate::model::LoadDistribution;
 use crate::model::ModelBuilder;
 use crate::model::ModelDraft;
 use crate::model::ModelDrafter;
+use crate::model::ModelRecon;
 use crate::model::StorageProfile;
 use crate::store::complexity::StepComplexity;
+use crate::store::key_position::KeyPositionRangeIterator;
 
 
 /* Accumulating mulitple drafters into one that tries and picks the best one */
@@ -100,6 +103,9 @@ impl ModelDrafter for MultipleDrafter {
 
 pub type BuilerProducer = dyn Fn() -> Box<dyn ModelBuilder> + Sync;
 
+type PreliminaryDraft = (Vec<KeyBuffer>, Box<dyn ModelRecon>, usize);
+const KPS_CHUNK_SIZE: usize = 10_000_000;
+
 pub struct BuilderAsDrafter {
   builder_producer: Box<BuilerProducer>,
 }
@@ -125,14 +131,12 @@ impl BuilderAsDrafter {
       .map(|load| load.percentile(50.0))
       .collect()
   }
-}
 
-impl ModelDrafter for BuilderAsDrafter {
-  fn draft(&self, kps: &KeyPositionCollection, profile: &dyn StorageProfile) -> GResult<ModelDraft> {
+  fn draft_inner(&self, kps_iter: &mut KeyPositionRangeIterator) -> GResult<PreliminaryDraft> {
     let mut model_builder = (*self.builder_producer)();
     let mut total_size = 0;
     let mut key_buffers = Vec::new();
-    for kpr in kps.range_iter() {
+    for kpr in kps_iter {
       if let Some(model_kb) = model_builder.consume(&kpr)? {
         total_size += model_kb.serialized_size();
         key_buffers.push(model_kb);
@@ -145,6 +149,32 @@ impl ModelDrafter for BuilderAsDrafter {
         total_size += model_kb.serialized_size();
         key_buffers.push(model_kb);
     }
+
+    Ok((key_buffers, serde, total_size))
+  }
+
+  fn draft_prelim(&self, kps: &KeyPositionCollection) -> GResult<PreliminaryDraft> {
+    // draft in each chunk on parallel
+    let mut prelim_drafts: Vec<PreliminaryDraft> = kps.chunk_iter(KPS_CHUNK_SIZE)
+      .par_iter_mut()
+      .map(|kps_iter| self.draft_inner(kps_iter)
+          .unwrap_or_else(|_| panic!("Drafting failed on a chunk of key-positions")))
+      .collect();
+
+    // combine all drafts
+    let (mut key_buffers, mut serde, mut total_size) = prelim_drafts.remove(0);
+    for (next_key_buffers, next_serde, next_total_size) in &mut prelim_drafts {
+      key_buffers.append(next_key_buffers);
+      serde.combine_with(next_serde.as_ref());
+      total_size += *next_total_size;
+    }
+    Ok((key_buffers, serde, total_size))
+  }
+}
+
+impl ModelDrafter for BuilderAsDrafter {
+  fn draft(&self, kps: &KeyPositionCollection, profile: &dyn StorageProfile) -> GResult<ModelDraft> {
+    let (key_buffers, serde, total_size) = self.draft_prelim(kps)?;
 
     // estimate cost
     let model_load_summary = self.summarize_loads(&serde.get_load());

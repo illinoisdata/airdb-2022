@@ -49,6 +49,14 @@ impl LoadDistribution {
     self.max_load = std::cmp::max(self.max_load, load as usize);
   }
 
+  pub fn extend(&mut self, other: &LoadDistribution) {
+    for idx in 0 .. self.load_counts.len() {
+      self.load_counts[idx] += other.load_counts[idx];
+    }
+    self.total_counts += other.total_counts;
+    self.max_load = std::cmp::max(self.max_load, other.max_load);
+  }
+
   pub fn average(&self) -> f64 {
     let mut avg = 0.0;
     let mut mul = 1.0;
