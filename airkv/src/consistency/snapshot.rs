@@ -9,6 +9,7 @@ use crate::{
     },
 };
 
+#[derive(Debug)]
 pub struct Snapshot {
     tail_len: SegLen,
     lsmt_desc: LsmTreeDesc,

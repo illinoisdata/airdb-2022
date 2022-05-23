@@ -11,7 +11,7 @@ pub static PLACEHOLDER_DATASEG_ID: SegID = 0;
 
 
 // SegDesc describes a data segment, it won't be used to describe the meta segment
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SegDesc {
     seg_id: SegID,
     ///
@@ -123,7 +123,7 @@ impl Serde<SegDesc> for SegDesc {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LevelSegDesc {
     /// The number of segments in the level.
     seg_num: u32,
@@ -180,7 +180,7 @@ impl LevelSegDesc {
 }
 
 //TODO: design a space-efficient way to clone or share the LsmTreeDesc
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct LsmTreeDesc {
     /// The number of levels in the LSM-Tree
     level_num: u8,

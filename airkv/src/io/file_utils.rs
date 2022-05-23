@@ -10,6 +10,7 @@ use url::Url;
 use crate::common::error::{GResult, GenericError, UrlParseFilePathError};
 
 /// if the length is 0, it means the range is from the offset to the end
+#[derive(Debug)]
 pub struct Range {
     pub offset: u64,
     pub length: u64,
@@ -94,7 +95,7 @@ impl FileUtil {
     }
 
     pub fn file_size(path: &Url) -> GResult<u64> {
-        let f = OpenOptions::new().read(true).open(path.path()).unwrap();
+        let f = OpenOptions::new().read(true).open(path.path())?;
         Ok(f.metadata()?.len())
     }
 

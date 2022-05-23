@@ -5,16 +5,20 @@ use std::{
     rc::Rc,
 };
 
-use crate::common::{dataslice::{DataSlice, SharedCacheData}, error::GResult};
+use crate::common::{
+    dataslice::{DataSlice, SharedCacheData},
+    error::GResult,
+};
 
 /// DataRange describe a part of a data segment
 /// range => the min/max position of the part in the segment
-/// data =>  the data for a part of the segment 
+/// data =>  the data for a part of the segment
 ///          use SharedCacheData(Rc<RefCell<Vec<u8>>>) to denote the data/cache in order to avoid memory copy
-/// 
+///
+#[derive(Debug)]
 pub struct DataRange {
     range: Range<u64>,
-    data: SharedCacheData, 
+    data: SharedCacheData,
 }
 
 impl DataRange {
@@ -46,8 +50,12 @@ impl DataRange {
     }
 
     /// whether the other range is a consecutive range
-    pub fn is_consecutive_range(&self, other: &DataRange) -> bool {
+    pub fn is_consecutive_data_range(&self, other: &DataRange) -> bool {
         self.range.end == other.get_range().start
+    }
+
+    pub fn is_consecutive_range(&self, other_range: &Range<u64>) -> bool {
+        self.range.end == other_range.start
     }
 
     pub fn contains_range(&self, range: &Range<u64>) -> bool {
@@ -74,9 +82,21 @@ impl DataRange {
     }
 
     pub fn append(&mut self, other: &mut DataRange) -> GResult<()> {
-        assert!(self.is_consecutive_range(other));
+        assert!(self.is_consecutive_data_range(other));
         self.data.borrow_mut().append(&mut other.get_mut_data());
+        // self.data.borrow_mut().extend(other.get_data());
         self.range.end = other.get_range().end;
+        Ok(())
+    }
+
+    pub fn append_from_slice(
+        &mut self,
+        other_range: &Range<u64>,
+        other_data: &[u8],
+    ) -> GResult<()> {
+        assert!(self.is_consecutive_range(other_range));
+        self.data.borrow_mut().extend_from_slice(other_data);
+        self.range.end = other_range.end;
         Ok(())
     }
 }
@@ -97,7 +117,7 @@ pub enum CacheHitStatus {
 }
 
 /// binary data cache for each data segment
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct DataCache {
     is_full: bool,
     // DataCache has to start from address 0
@@ -119,19 +139,31 @@ impl DataCache {
         self.is_full
     }
 
+    pub fn set_full(&mut self) {
+        self.is_full = true;
+    }
+
+    pub fn get_range(&self) -> &Range<u64> {
+        self.cached_data.get_range()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.cached_data.is_empty()
     }
 
     pub fn get_full(&self) -> GResult<CacheHitStatus> {
         if self.is_full {
-            Ok(CacheHitStatus::Hit {data: DataSlice::wrap(self.cached_data.get_data_rc())})
+            Ok(CacheHitStatus::Hit {
+                data: DataSlice::wrap(self.cached_data.get_data_rc()),
+            })
         } else if self.is_empty() {
-             // 0 for miss_range.end stands for reading to the end of the segment
-             Ok(CacheHitStatus::Miss {miss_range: 0..0})
+            // 0 for miss_range.end stands for reading to the end of the segment
+            Ok(CacheHitStatus::Miss { miss_range: 0..0 })
         } else {
-             // 0 for miss_range.end stands for reading to the end of the segment
-             Ok(CacheHitStatus::HitPartial {miss_range: self.cached_data.get_range().end..0})
+            // 0 for miss_range.end stands for reading to the end of the segment
+            Ok(CacheHitStatus::HitPartial {
+                miss_range: self.cached_data.get_range().end..0,
+            })
         }
     }
 
@@ -142,7 +174,10 @@ impl DataCache {
             })
         } else if self.cached_data.contains_range(target_range) {
             Ok(CacheHitStatus::Hit {
-                data: DataSlice::new(self.cached_data.get_data_rc(), target_range.start as usize..target_range.end as usize),
+                data: DataSlice::new(
+                    self.cached_data.get_data_rc(),
+                    target_range.start as usize..target_range.end as usize,
+                ),
             })
         } else if self.cached_data.is_overlapping_range(target_range) {
             let diff = self.cached_data.range_difference(target_range);
@@ -154,10 +189,24 @@ impl DataCache {
         }
     }
 
-    pub fn update(&mut self, is_full: bool, new_range: &mut DataRange) -> GResult<()> {
-        self.cached_data.append(new_range)?;
+    // pub fn update(&mut self, is_full: bool, new_range: DataRange) -> GResult<()> {
+    //     if self.cached_data.is_empty() {
+    //         self.cached_data = new_range;
+    //     } else {
+    //         self.cached_data.append(&mut new_range)?;
+    //     }
+    //     self.is_full = is_full;
+    //     Ok(())
+    // }
+
+    pub fn update_from_slice(
+        &mut self,
+        is_full: bool,
+        new_range: Range<u64>,
+        data: &[u8],
+    ) -> GResult<()> {
+        self.cached_data.append_from_slice(&new_range, data)?;
         self.is_full = is_full;
         Ok(())
     }
 }
-

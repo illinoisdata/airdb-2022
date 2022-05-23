@@ -5,7 +5,7 @@ use super::{
     segment::{Entry, ReadEntryIterator, SegSize, SegmentInfo},
 };
 use crate::{
-    cache::data_cache::{CacheHitStatus, DataCache, DataRange},
+    cache::data_cache::{CacheHitStatus, DataCache},
     common::{
         bytebuffer::ByteBuffer, dataslice::DataSlice, error::GResult,
         read_bytebuffer::ReadByteBuffer, reverse_bytebuffer::ReversedByteBuffer,
@@ -37,11 +37,58 @@ impl Segment for DataSegment {
         // access cache first
         match self.data_cache.get_full()? {
             CacheHitStatus::Hit { data } => Ok(data),
-            CacheHitStatus::HitPartial { miss_range } | CacheHitStatus::Miss { miss_range } => {
+            // CacheHitStatus::HitPartial { miss_range } | CacheHitStatus::Miss { miss_range } => {
+            //     // cache miss => update cache and read cache again
+            // let data = conn.read_range(self.get_path(), &Range::transfer_from(&miss_range))?;
+            //     self.data_cache
+            //         .update(true, &mut DataRange::new(miss_range, data))?;
+            //     // read cache again, expect a cache hit
+            //     match self.data_cache.get_full()? {
+            //         CacheHitStatus::Hit { data } => Ok(data),
+            //         _ => panic!("unexpected cache status"),
+            //     }
+            // }
+            CacheHitStatus::HitPartial { miss_range } => {
                 // cache miss => update cache and read cache again
-                let data = conn.read_range(self.get_path(), &Range::transfer_from(&miss_range))?;
-                self.data_cache
-                    .update(true, &mut DataRange::new(miss_range, data))?;
+                assert!(miss_range.end == 0);
+
+                if miss_range.start == 0 {
+                    // read all
+                    let data = conn.read_all(self.get_path())?;
+                    if data.is_empty() {
+                        self.data_cache.set_full();
+                    } else {
+                        self.data_cache.update_from_slice(
+                            true,
+                            miss_range.start..(miss_range.start + data.len() as u64),
+                            &data,
+                        )?;
+                    }
+                } else {
+                    // trick: read one more byte to avoid invalid range index
+                    let read_range = (miss_range.start - 1)..miss_range.end;
+                    let data =
+                        conn.read_range(self.get_path(), &Range::transfer_from(&read_range))?;
+                    if data.len() > 1 {
+                        self.data_cache.update_from_slice(
+                            true,
+                            miss_range.start..(miss_range.start + data.len() as u64 - 1),
+                            &data[1..],
+                        )?;
+                    } else {
+                        self.data_cache.set_full();
+                    }
+                }
+
+                match self.data_cache.get_full()? {
+                    CacheHitStatus::Hit { data } => Ok(data),
+                    _ => panic!("unexpected cache status"),
+                }
+            }
+            CacheHitStatus::Miss { miss_range: _ } => {
+                // cache miss => update cache and read cache again
+                let data = conn.read_all(self.get_path())?;
+                self.data_cache = DataCache::new(true, 0..data.len() as u64, data);
                 // read cache again, expect a cache hit
                 match self.data_cache.get_full()? {
                     CacheHitStatus::Hit { data } => Ok(data),
@@ -52,6 +99,8 @@ impl Segment for DataSegment {
     }
 
     fn read_range(&mut self, conn: &dyn StorageConnector, range: &Range) -> GResult<DataSlice> {
+        //TODO: remove this line
+        assert!(!range.reach_seg_end());
         let cache_range = &range.transfer_to();
         match self.data_cache.get(cache_range)? {
             CacheHitStatus::Hit { data } => Ok(data),
@@ -59,14 +108,12 @@ impl Segment for DataSegment {
                 // cache miss => update cache and read cache again
                 let seg_range = &Range::transfer_from(&miss_range);
                 let data = conn.read_range(self.get_path(), seg_range)?;
-                self.data_cache.update(
-                    seg_range.reach_seg_end(),
-                    &mut DataRange::new(miss_range, data),
-                )?;
+                self.data_cache
+                .update_from_slice(false, miss_range, &data)?;
                 // read cache again, expect a cache hit
                 match self.data_cache.get(cache_range)? {
                     CacheHitStatus::Hit { data } => Ok(data),
-                    _ => panic!("unexpected cache status for range {:?}",cache_range),
+                    _ => panic!("unexpected cache status for range {:?}, cahced_range {:?}", cache_range, self.data_cache.get_range()),
                 }
             }
         }
@@ -171,22 +218,56 @@ impl EntryAccess for DataSegment {
 mod tests {
     use rand::Rng;
     use std::collections::HashMap;
+    use url::Url;
 
     use tempfile::TempDir;
 
     use crate::{
+        cache::data_cache::{CacheHitStatus, DataCache},
         common::error::GResult,
         io::{
-            fake_store_service_conn::FakeStoreServiceConnector, file_utils::UrlUtil,
+            azure_conn::AzureConnector,
+            fake_store_service_conn::FakeStoreServiceConnector,
+            file_utils::{UrlUtil},
             storage_connector::StorageConnector,
         },
         storage::{
             data_entry::{AppendRes, EntryAccess},
-            segment::{Entry, SegID, Segment, SegmentInfo, SegmentType}, seg_util::DATA_SEG_ID_MIN,
+            seg_util::DATA_SEG_ID_MIN,
+            segment::{Entry, SegID, Segment, SegmentInfo, SegmentType},
         },
     };
 
     use super::DataSegment;
+
+    #[test]
+    fn cache_range_test() -> GResult<()> {
+        let mut data_cache = DataCache::default();
+        assert!(!data_cache.is_full());
+        assert_eq!(data_cache.get_range(), &(0..0));
+        data_cache.update_from_slice(true, 0..0, &[1, 2, 4])?;
+        match data_cache.get_full()? {
+            CacheHitStatus::Hit { data } => assert_eq!(data.copy_range(0..3), vec![1, 2, 4]),
+            _ => panic!("unexpected cache hit status"),
+        }
+        Ok(())
+    }
+
+    // let data = conn.read_range(self.get_path(), &Range::transfer_from(&read_range))?;
+
+    #[test]
+    fn range_all_corner_test() -> GResult<()> {
+        let test_path = format!("az:///{}/{}", "airkv", "test_blob_corner");
+        let url = Url::parse(&test_path)?;
+        let mut conn = AzureConnector::default();
+        let fake_props: &HashMap<String, String> = &HashMap::new();
+        conn.open(fake_props)?;
+        conn.create(&url)?;
+        let data = conn.read_all(&url)?;
+        assert_eq!(data.len(), 0);
+        conn.remove(&url)?;
+        Ok(())
+    }
 
     #[test]
     fn data_segment_l0_test() -> GResult<()> {
@@ -267,7 +348,10 @@ mod tests {
             assert!(search_entry_op.is_some());
             let search_entry = search_entry_op.unwrap();
             assert_eq!(target_entry.get_key_slice(), search_entry.get_key_slice());
-            assert_eq!(target_entry.get_value_slice(), search_entry.get_value_slice());
+            assert_eq!(
+                target_entry.get_value_slice(),
+                search_entry.get_value_slice()
+            );
         });
 
         Ok(())
@@ -342,7 +426,10 @@ mod tests {
             assert!(search_entry_op.is_some());
             let search_entry = search_entry_op.unwrap();
             assert_eq!(target_entry.get_key_slice(), search_entry.get_key_slice());
-            assert_eq!(target_entry.get_value_slice(), search_entry.get_value_slice());
+            assert_eq!(
+                target_entry.get_value_slice(),
+                search_entry.get_value_slice()
+            );
         });
 
         Ok(())
