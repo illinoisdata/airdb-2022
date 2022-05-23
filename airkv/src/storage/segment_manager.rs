@@ -36,6 +36,10 @@ impl SegmentManager {
         }
     }
 
+    pub fn get_home_dir(&self) -> &Url {
+        &self.home_dir
+    }
+
     //TODO: find a better way to get datasegment
     pub fn get_data_seg(&mut self, seg_id: SegID) -> &mut DataSegment {
         let dir = &self.home_dir;

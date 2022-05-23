@@ -340,6 +340,7 @@ impl CriticalOperation for TailUpdateCO {
         lock_id: AirLockID,
     ) -> GResult<()> {
         let new_tail = self.res_ids[0];
+
         // create new tail
         seg_manager.create_new_tail_seg(conn, new_tail)?;
         // update tree desc: add old tail to level 0 and add a new tail

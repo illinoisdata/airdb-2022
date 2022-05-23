@@ -96,7 +96,7 @@ impl FakeStoreService for ServiceImpl {
                 ResultUtil::transfer_service_repsonse(
                     FileUtil::file_size(&(UrlUtil::url_from_string(&request.path).unwrap())),
                     |x| GetSizeResponse { size: x },
-                    "get size of a segment",
+                    &format!("get size of a segment in path: {}", request.path),
                     &format!("get size of {}", &request.path),
                 )
             })
@@ -126,11 +126,28 @@ impl FakeStoreService for ServiceImpl {
                 let block_num = if is_seal {
                     0u16
                 } else {
-                    *BLOCKNUM_MAP.get(url.path()).unwrap_or_else(|| {
-                        panic!("Problem getting block number of path[{}]", url.path())
-                    })
+                    let path = url.path();
+                    let block_num_option = BLOCKNUM_MAP.get(path);
+                    let block_num = if let Some(entry) = block_num_option {
+                        *entry
+                    } else if path.contains("meta_") {
+                        BLOCKNUM_MAP.insert(path.to_string(), 0u16);
+                        0u16
+                    } else {
+                        panic!("Problem getting block number of path[{}]", path);
+                    };
+                    // *BLOCKNUM_MAP.get(url.path()).unwrap_or_else(|| {
+                    //     panic!("Problem getting block number of path[{}]", url.path())
+                    // })
+                    block_num
                 };
-                println!("get props {}, len: {}, block_num: {}, is_sealed: {}", url.path(), len, block_num, is_seal);
+                println!(
+                    "get props {}, len: {}, block_num: {}, is_sealed: {}",
+                    url.path(),
+                    len,
+                    block_num,
+                    is_seal
+                );
 
                 Ok(Response::new(GetPropsResponse {
                     seglen: len,
@@ -195,12 +212,21 @@ impl FakeStoreService for ServiceImpl {
                             panic!("Problem flushing the append data to path[{}]", path)
                         });
                         BLOCKNUM_MAP.alter(path, |_, v| v + 1);
-                        let block_num = *BLOCKNUM_MAP.get(path).unwrap_or_else(|| {
-                            panic!("Problem getting block number of path[{}]", path)
-                        });
+                        let block_num_option = BLOCKNUM_MAP.get(path);
+                        let block_num = if let Some(entry) = block_num_option {
+                            *entry
+                        } else if path.contains("meta_") {
+                            BLOCKNUM_MAP.insert(path.to_string(), 1u16);
+                            1u16
+                        } else {
+                            panic!("Problem getting block number of path[{}]", path);
+                        };
+
+                        // let block_num = *BLOCKNUM_MAP.get(path).unwrap_or_else(|| {
+                        //     panic!("Problem getting block number of path[{}]", path)
+                        // });
 
                         println!("append {}", url.path());
-
 
                         AppendResponse {
                             status: AppendRes::Success(0).to_status_code(),

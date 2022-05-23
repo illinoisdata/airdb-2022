@@ -1,4 +1,4 @@
-use std::{collections::HashMap};
+use std::{collections::HashMap, fmt::Debug};
 
 use url::Url;
 use uuid::Uuid;
@@ -11,9 +11,10 @@ use crate::{
         snapshot::Snapshot,
     },
     io::{
+        azure_conn::AzureConnector,
         fake_store_service_conn::FakeStoreServiceConnector,
         local_storage_conn::LocalStorageConnector,
-        storage_connector::{StorageConnector, StorageType}, azure_conn::AzureConnector,
+        storage_connector::{StorageConnector, StorageType},
     },
     storage::{
         data_entry::{AppendRes, EntryAccess},
@@ -27,31 +28,57 @@ use crate::{
 pub type Key = Vec<u8>;
 pub type Value = Vec<u8>;
 
-
 pub struct DBFactory {}
 
 impl DBFactory {
     pub fn new_rwdb(home_dir_new: Url, store_type: StorageType) -> Box<dyn RWDB> {
         match store_type {
+            StorageType::AzureStore => {
+                Box::new(RWDBImpl::<AzureConnector>::new_from_connector(
+                    home_dir_new,
+                    AzureConnector::default(),
+                ))
+            },
+            StorageType::RemoteFakeStore => {
+                Box::new(RWDBImpl::<FakeStoreServiceConnector>::new_from_connector(
+                    home_dir_new,
+                    FakeStoreServiceConnector::default(),
+                ))
+            },
             StorageType::LocalFakeStore => {
                 Box::new(RWDBImpl::<LocalStorageConnector>::new_from_connector(
                     home_dir_new,
                     LocalStorageConnector::default(),
                 ))
             }
-            StorageType::RemoteFakeStore => {
-                Box::new(RWDBImpl::<FakeStoreServiceConnector>::new_from_connector(
-                    home_dir_new,
-                    FakeStoreServiceConnector::default(),
-                ))
-            }
-            StorageType::AzureStore => {
-                //TODO
+        }
+    }
+
+
+    pub fn new_rwdb_from_str(home_dir: String, store_type: String) -> Box<dyn RWDB> {
+       let home_dir_new = Url::parse(&home_dir).unwrap_or_else(|_| panic!("parse url error: the home dir is {}", home_dir));
+        match store_type.as_str() {
+            "AzureStore" => {
                 Box::new(RWDBImpl::<AzureConnector>::new_from_connector(
                     home_dir_new,
                     AzureConnector::default(),
                 ))
+            },
+            "RemoteFakeStore" => {
+                Box::new(RWDBImpl::<FakeStoreServiceConnector>::new_from_connector(
+                    home_dir_new,
+                    FakeStoreServiceConnector::default(),
+                ))
+            },
+            "LocalFakeStore" => {
+                Box::new(RWDBImpl::<LocalStorageConnector>::new_from_connector(
+                    home_dir_new,
+                    LocalStorageConnector::default(),
+                ))
             }
+            store_type => {
+                panic!("wrong storage type {}", store_type)
+            } 
         }
     }
 
@@ -82,6 +109,7 @@ pub trait RWDB {
     fn close(&mut self) -> GResult<()>;
 }
 
+#[derive(Debug)]
 pub struct DBProps {
     seg_block_num_limit: u16,
 }
@@ -111,8 +139,21 @@ pub struct RWDBImpl<T: StorageConnector> {
     props: DBProps,
 }
 
+impl<T: StorageConnector> Debug for RWDBImpl<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RWDBImpl").field("client_id", &self.client_id).field("props", &self.props).finish()
+    }
+}
+
+
+impl<T: StorageConnector> Drop for RWDBImpl<T> {
+    fn drop(&mut self) {
+        println!("destructor has been called");
+    }
+}
+
 impl<T: StorageConnector> RWDBImpl<T> {
-    fn new_from_connector(home_dir_new: Url, connector_new: T) -> RWDBImpl<T> {
+    pub fn new_from_connector(home_dir_new: Url, connector_new: T) -> RWDBImpl<T> {
         let client_id_new = DBFactory::gen_client_id();
         Self {
             store_connector: connector_new,
@@ -148,7 +189,8 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
     // fn put(&'b mut self, key: Key, value: Value) -> GResult<()> {
     fn put(&mut self, key: Key, value: Value) -> GResult<()> {
         let entries = vec![Entry::new(key, value)];
-        self.put_entries(entries)
+        self.put_entries(entries)?;
+        Ok(())
     }
 
     fn put_entries(&mut self, entries: Vec<Entry>) -> GResult<()> {
@@ -175,7 +217,8 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
                 self.create_or_get_updated_tail(tail_id)?;
                 // append to the new tail
                 // TODO: check how to converge
-                self.put_entries(entries)
+                self.put_entries(entries)?;
+                Ok(())
             }
             AppendRes::AppendToSealedFailure => {
                 let updated_tail = self
@@ -184,13 +227,15 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
                     .get_refreshed_tail(&self.store_connector)?;
                 if updated_tail != tail_id {
                     // the tail has been updated, append to the new tail
-                    self.put_entries(entries)
+                    self.put_entries(entries)?;
+                    Ok(())
                 } else {
                     // rarely go to this branch(it happens only when a client sealed the old tail but failed to update a new tail)
                     // the tail remains the same, try to update tail
                     self.create_or_get_updated_tail(tail_id)?;
                     // append to the new tail
-                    self.put_entries(entries)
+                    self.put_entries(entries)?;
+                    Ok(())
                 }
             }
             other => Err(Box::new(AppendError::new(other.to_string()))),
@@ -199,9 +244,21 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
 
     fn get(&mut self, key: &Key) -> GResult<Option<Entry>> {
         let mut tail_props = self.try_get_tail_props_from_cache()?;
+
         while !tail_props.is_active_tail() {
+            // println!("try to get active tail");
             tail_props = self.try_get_tail_props_updated()?;
         }
+        // println!(
+        //     "XXX {:?} current tail props {:?} for tail {}",
+        //     thread::current().id(),
+        //     tail_props,
+        //     SegmentInfo::generate_dir(
+        //         self.seg_manager.get_home_dir(),
+        //         self.seg_manager.get_cached_tail_id(),
+        //         0
+        //     )
+        // );
         self.get_from_snapshot(self.gen_snapshot_from_cache(tail_props), key)
     }
 
@@ -257,8 +314,13 @@ impl<T: StorageConnector> RWDBImpl<T> {
     // otherwise create a new tail
     // return => whether the new tail has been created by the current client
     fn create_or_get_updated_tail(&mut self, old_tail_id: SegID) -> GResult<bool> {
-        let tail_update_co =
-            TailUpdateCO::new(vec![SegIDUtil::gen_next_tail(old_tail_id)], self.client_id);
+        let new_tail = SegIDUtil::gen_next_tail(old_tail_id);
+        // println!(
+        //     "XXX create_or_get_updated_tail for tail {} in client {}",
+        //     SegmentInfo::generate_dir(self.seg_manager.get_home_dir(), new_tail, 0),
+        //     self.client_id
+        // );
+        let tail_update_co = TailUpdateCO::new(vec![new_tail], self.client_id);
         let mut run_success: bool = false;
         loop {
             let is_uninit =
@@ -293,9 +355,9 @@ mod tests {
         thread::{self, JoinHandle},
     };
 
+    use serial_test::serial;
     use tempfile::TempDir;
     use url::Url;
-    use serial_test::serial;
 
     use crate::{
         common::error::GResult,

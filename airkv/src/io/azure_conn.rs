@@ -1,8 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, thread};
 
 use azure_core::{headers::get_from_headers, HttpError};
 use azure_storage::clients::{AsStorageClient, StorageAccountClient, StorageClient};
-use azure_storage_blobs::prelude::{AsBlobClient, AsContainerClient, BlobClient};
+use azure_storage_blobs::prelude::{AsBlobClient, AsContainerClient, BlobClient, ContainerClient};
 
 use itertools::Itertools;
 use prost::bytes::Bytes;
@@ -68,7 +68,8 @@ impl StorageConnector for AzureConnector {
     }
 
     fn close(&mut self) -> GResult<()> {
-        todo!()
+        //TODO: release resources
+        Ok(())
     }
 
     fn read_all(&self, path: &Url) -> GResult<Vec<u8>> {
@@ -76,7 +77,23 @@ impl StorageConnector for AzureConnector {
     }
 
     fn read_range(&self, path: &Url, range: &Range) -> GResult<Vec<u8>> {
-        self.run_time.block_on(self.read_range_async(path, range))
+        // self.run_time.block_on(self.read_range_async(path, range))
+        let response_res = self.run_time.block_on(self.read_range_async(path, range));
+        match response_res {
+            Ok(response) => {
+                // println!("INFO: read-range response: {:?}", response);
+                Ok(response)
+            }
+            Err(err) => {
+                println!(
+                    "ERROR: {:?} read range error for path {} + error: {:?}",
+                    thread::current().id(),
+                    path,
+                    err
+                );
+                Err(err)
+            }
+        }
     }
 
     fn get_size(&self, path: &Url) -> GResult<u64> {
@@ -110,24 +127,19 @@ impl StorageConnector for AzureConnector {
 
 impl AzureConnector {
     async fn read_all_async(&self, url: &Url) -> GResult<Vec<u8>> {
-        let blob_response = self.blob_client(url).get().execute().await?;
+        let blob_response = self.blob_client_from_url(url).get().execute().await?;
         Ok(blob_response.data.to_vec())
     }
 
     async fn write_all_async(&self, url: &Url, buf: &[u8]) -> GResult<()> {
         // TODO: avoid copy?
         // TODO: support append blob
-        self.blob_client(url)
+        self.blob_client_from_url(url)
             .put_block_blob(Bytes::copy_from_slice(buf))
             .execute()
             .await?;
 
         // log::debug!("{:?}", response);
-        Ok(())
-    }
-
-    async fn remove_async(&self, path: &Url) -> GResult<()> {
-        self.blob_client(path).delete().execute().await?;
         Ok(())
     }
 
@@ -243,23 +255,75 @@ impl AzureConnector {
             .prepare_request(url.as_str(), &http::Method::PUT, &|request| request, None)
             .expect("ERROR: failed to generate seal request");
 
-        // println!("INFO: append request: {:?}", request);
+        // println!("INFO: seal request: {:?}", request);
 
         let response = storage_client
             .http_client()
             .execute_request_check_status(request, http::StatusCode::CREATED)
             .await;
         match response {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // println!("INFO: seal response: {:?}", response);
+                Ok(())
+            }
             Err(err) => {
-                println!("ERROR: error response for append request: {:?}", err);
+                println!("ERROR: error response for seal request: {:?}", err);
                 Err(Box::new(err))
             }
         }
     }
 
     async fn create_async(&self, path: &Url) -> GResult<()> {
-        self.blob_client(path).put_append_blob().execute().await?;
+        let (container_name, blob_option) = AzureConnector::parse_container_or_blob(path)?;
+
+        // find out whether to create a container or a blob
+        match blob_option {
+            Some(blob_name) => {
+                self.blob_client(container_name, blob_name)
+                    .put_append_blob()
+                    .execute()
+                    .await?;
+            }
+            None => {
+                self.container_client(container_name)
+                    .create()
+                    .execute()
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn remove_async(&self, path: &Url) -> GResult<()> {
+        let (container_name, blob_option) = AzureConnector::parse_container_or_blob(path)?;
+        // find out whether to delete a container or a blob
+        match blob_option {
+            Some(blob_name) => {
+                self.blob_client(container_name, blob_name)
+                    .delete()
+                    .execute()
+                    .await?;
+            }
+            None => {
+                self.container_client(container_name)
+                    .delete()
+                    .execute()
+                    .await?;
+
+                // match self
+                //     .container_client(container_name)
+                //     .delete()
+                //     .execute()
+                //     .await
+                // {
+                //     Ok(_) => {},
+                //     Err(err) => {
+                //         println!("ERROR: remove container error {:?}", err);
+                //         panic!("ERROR: remove container error");
+                //     },
+                // }
+            }
+        }
         Ok(())
     }
 
@@ -294,7 +358,7 @@ impl AzureConnector {
                 AppendRes::<SegSize>::Success(block_num)
             }
             Err(err) => {
-                println!("ERROR: error response for append request: {:?}", err);
+                // println!("INFO: error response for append request: {:?}", err);
                 match err {
                     HttpError::StatusCode { status: _, body } => {
                         let azure_error = AzureError::from_str(body.as_str());
@@ -313,7 +377,8 @@ impl AzureConnector {
     }
 
     fn get_request_info(&self, client: &Arc<StorageClient>, path: &Url) -> (Url, String, String) {
-        let (container_name, blob_name) = self.parse_url(path).expect("parse url failed");
+        let (container_name, blob_name) =
+            AzureConnector::parse_blob(path).expect("parse url failed");
         let url = client
             .blob_url_with_segments(
                 Some(container_name.as_str())
@@ -324,8 +389,13 @@ impl AzureConnector {
         (url, container_name, blob_name)
     }
 
-    fn blob_client(&self, url: &Url) -> Arc<BlobClient> {
-        let (container_name, blob_name) = self.parse_url(url).expect("parse url failed");
+    fn blob_client_from_url(&self, url: &Url) -> Arc<BlobClient> {
+        let (container_name, blob_name) =
+            AzureConnector::parse_blob(url).expect("parse url failed");
+        self.blob_client(container_name, blob_name)
+    }
+
+    fn blob_client(&self, container_name: String, blob_name: String) -> Arc<BlobClient> {
         match self.client {
             Some(ref c) => c
                 .as_container_client(container_name)
@@ -334,7 +404,14 @@ impl AzureConnector {
         }
     }
 
-    fn parse_url(&self, url: &Url) -> GResult<(String, String)> {
+    fn container_client(&self, container_name: String) -> Arc<ContainerClient> {
+        match self.client {
+            Some(ref c) => c.as_container_client(container_name),
+            None => panic!("ERROR: the azure storageaccountclient is none"),
+        }
+    }
+
+    fn parse_blob(url: &Url) -> GResult<(String, String)> {
         // container name, blob path
         let mut path_segments = url
             .path_segments()
@@ -344,6 +421,27 @@ impl AzureConnector {
             .ok_or_else(|| InvalidAzureStorageUrl::new("Require container name"))?;
         let blob_path = Itertools::intersperse(path_segments, "/").collect();
         Ok((container.to_string(), blob_path))
+    }
+
+    fn parse_container_or_blob(url: &Url) -> GResult<(String, Option<String>)> {
+        // container name, blob path
+        let mut path_segments = url
+            .path_segments()
+            .ok_or_else(|| InvalidAzureStorageUrl::new("Failed to segment url"))?;
+        let container = path_segments
+            .next()
+            .ok_or_else(|| InvalidAzureStorageUrl::new("Require container name"))?;
+        // blob
+        match path_segments.next() {
+            Some(blob) => {
+                if blob.is_empty() {
+                    Ok((container.to_string(), None))
+                } else {
+                    Ok((container.to_string(), Some(blob.to_string())))
+                }
+            }
+            None => Ok((container.to_string(), None)),
+        }
     }
 }
 
@@ -363,9 +461,19 @@ impl AzureUtil {
 #[cfg(test)]
 mod tests {
 
-    use crate::{common::error::GResult, storage::data_entry::AppendRes};
+    use std::collections::HashMap;
 
-    use super::AzureError;
+    use itertools::Itertools;
+    use serial_test::serial;
+    use url::Url;
+
+    use crate::{
+        common::error::{GResult, InvalidAzureStorageUrl},
+        io::storage_connector::StorageConnector,
+        storage::data_entry::AppendRes,
+    };
+
+    use super::{AzureConnector, AzureError};
 
     #[test]
     fn test_azure_error_parser() -> GResult<()> {
@@ -380,6 +488,59 @@ mod tests {
             _ => panic!("AppendToSealedFailure Not Found"),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_url_parser() -> GResult<()> {
+        let blob_url = Url::parse(&format!("az:///{}/{}", "airkv", "test_blob"))?;
+        let container_url = Url::parse(&format!("az:///{}", "airkv"))?;
+        // container name, blob path
+        let mut path_segments = blob_url
+            .path_segments()
+            .ok_or_else(|| InvalidAzureStorageUrl::new("Failed to segment url"))?;
+        let container = path_segments
+            .next()
+            .ok_or_else(|| InvalidAzureStorageUrl::new("Require container name"))?;
+        // let blob_path: String = Itertools::intersperse(path_segments, "/").collect();
+        let blob_path = path_segments
+            .next()
+            .ok_or_else(|| InvalidAzureStorageUrl::new("Require blob name"))?;
+        assert_eq!(container, "airkv");
+        assert_eq!(blob_path, "test_blob");
+        println!("blob path: {}", blob_path);
+
+        let mut path_segments_1 = container_url
+            .path_segments()
+            .ok_or_else(|| InvalidAzureStorageUrl::new("Failed to segment url"))?;
+        let container_1 = path_segments_1
+            .next()
+            .ok_or_else(|| InvalidAzureStorageUrl::new("Require container name"))?;
+        // let blob_path_1: String = Itertools::intersperse(path_segments_1, "/").collect();
+        let blob_path_1 = path_segments_1.next();
+
+        assert_eq!(container_1, "airkv");
+        assert!(blob_path_1.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn test_container_deletion() -> GResult<()> {
+        let test_path = format!("az:///{}", "deletiontest");
+        let home_url = Url::parse(&test_path)?;
+        let blob_path = format!("az:///{}/{}", "deletiontest", "container_test_blob");
+        let blob_url = Url::parse(&blob_path)?;
+        let mut util_conn = AzureConnector::default();
+        let fake_props: &HashMap<String, String> = &HashMap::new();
+        util_conn.open(fake_props)?;
+        //create container
+        util_conn.create(&home_url)?;
+        //create blob
+        util_conn.create(&blob_url)?;
+        //delete container
+        util_conn.remove(&home_url)?;
         Ok(())
     }
 }

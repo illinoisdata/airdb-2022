@@ -1,5 +1,7 @@
-use derive_more::Display;
 use std::error::Error;
+
+use derive_more::Display;
+use anyhow::Result;
 use tonic::{Code, Response, Status};
 
 pub type GenericError = Box<dyn Error + Send + Sync>;
@@ -96,6 +98,7 @@ impl ResultUtil {
                 Ok(Response::new(resp_transfer(res)))
             }
             Err(error) => {
+                println!("encounter error for service {}: {:?}", service_name, error);
                 eprintln!("encounter error for service {}: {:?}", service_name, error);
                 Err(Status::new(Code::Unknown, format!("{:?}", error)))
             }
