@@ -368,6 +368,19 @@ impl ModelRecon for BandModelRecon {
   fn get_load(&self) -> Vec<LoadDistribution> {
     vec![self.load.clone()]
   }
+
+  fn combine_with(&mut self, other: &dyn ModelRecon) {
+    match other.to_typed() {
+      ModelReconMeta::Band { meta } => {
+        self.load.extend(&meta.load);
+      },
+      _ => panic!("Cannot combine StepModelRecon with this {:?}", other),
+    }
+  }
+
+  fn to_typed(&self) -> ModelReconMeta {
+    ModelReconMeta::Band { meta: Box::new(self.clone()) }
+  }
 }
 
 impl ModelReconMetaserde for BandModelRecon {  // for Metaserde
@@ -602,7 +615,7 @@ impl BandConvexHullEqualBuilder {
 pub struct BandMultipleDrafter;
 
 impl BandMultipleDrafter {
-  pub fn greedy_exponentiation(low_load: PositionT, high_load: PositionT, exponent: f64) -> MultipleDrafter {
+  pub fn greedy_exp(low_load: PositionT, high_load: PositionT, exponent: f64) -> MultipleDrafter {
     let mut bm_drafters = Vec::new();
     let mut current_load = low_load;
     while current_load < high_load {
@@ -613,7 +626,7 @@ impl BandMultipleDrafter {
     MultipleDrafter::from(bm_drafters)
   }
 
-  pub fn equal_exponentiation(low_load: PositionT, high_load: PositionT, exponent: f64) -> MultipleDrafter {
+  pub fn equal_exp(low_load: PositionT, high_load: PositionT, exponent: f64) -> MultipleDrafter {
     let mut bm_drafters = Vec::new();
     let mut current_load = low_load;
     while current_load < high_load {

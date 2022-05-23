@@ -9,8 +9,8 @@ use crate::store::key_position::POSITION_LENGTH;
 // estimate complexity based on step functions
 // FUTURE: may extract trait interface if there is another way to estimate this 
 pub struct StepComplexity;
-const STEP_SIZE: usize = 2 * (KEY_LENGTH + POSITION_LENGTH);  // size of a step function in bytes, typically 2 * (8 + 8) = 32 bytes
-const MAX_LAYERS: usize = 10;  // with 32-byte window, this handles up to ~1 petabytes of data 
+const STEP_SIZE: usize = KEY_LENGTH + POSITION_LENGTH;  // size of a step function in bytes, typically 8 + 8 = 16 bytes
+const MAX_LAYERS: usize = 16;  // with 16-byte window, this handles up to 2^64 bytes ~ 18 exabytes of data 
 
 impl StepComplexity {
 
@@ -69,6 +69,6 @@ mod tests {
       Bandwidth::from_mbps(20.0)
     )) as Box<dyn StorageProfile>;
     assert_measure(StepComplexity::measure(profile.as_ref(), 320_000), vec![320_000], &profile);
-    assert_measure(StepComplexity::measure(profile.as_ref(), 32_000_000), vec![32_000, 32_000], &profile);
+    assert_measure(StepComplexity::measure(profile.as_ref(), 32_000_000), vec![22_640, 22_627], &profile);
   }
 }

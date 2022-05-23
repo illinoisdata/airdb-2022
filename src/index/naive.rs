@@ -6,6 +6,7 @@ use crate::index::IndexMeta;
 use crate::index::IndexMetaserde;
 use crate::index::KeyPositionRange;
 use crate::index::KeyT;
+use crate::index::LoadDistribution;
 use crate::meta::Context;
 use crate::store::key_position::KeyPositionCollection;
 use crate::store::key_position::PositionT;
@@ -28,6 +29,10 @@ impl NaiveIndex {
 impl Index for NaiveIndex {
   fn predict(&self, key: &KeyT) -> GResult<KeyPositionRange> {
     Ok(KeyPositionRange::from_bound(*key, *key, self.start_position, self.end_position))
+  }
+
+  fn get_load(&self) -> Vec<LoadDistribution> {
+    vec![LoadDistribution::exact(self.end_position - self.start_position)]
   }
 }
 

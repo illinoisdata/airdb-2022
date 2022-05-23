@@ -3,6 +3,7 @@ use std::fmt::Debug;
 
 use crate::common::error::GResult;
 use crate::meta::Context;
+use crate::model::load::LoadDistribution;
 use crate::store::key_position::KeyPositionCollection;
 use crate::store::key_position::KeyPositionRange;
 use crate::store::key_position::KeyT;
@@ -12,13 +13,14 @@ use crate::store::key_position::KeyT;
 
 pub trait Index: IndexMetaserde + Debug {
   fn predict(&self, key: &KeyT) -> GResult<KeyPositionRange>;
+  fn get_load(&self) -> Vec<LoadDistribution>;
 }
 
 pub trait PartialIndex: PartialIndexMetaserde + Index {
   fn predict_within(&self, kr: &KeyPositionRange) -> GResult<KeyPositionRange>;
 }
 
-pub trait IndexBuilder {
+pub trait IndexBuilder: Debug {
   fn build_index(&self, kps: &KeyPositionCollection) -> GResult<Box<dyn Index>>;
 }
 

@@ -11,6 +11,7 @@ use crate::index::IndexMeta;
 use crate::index::IndexMetaserde;
 use crate::index::KeyPositionRange;
 use crate::index::KeyT;
+use crate::index::LoadDistribution;
 use crate::io::internal::ExternalStorage;
 use crate::meta::Context;
 use crate::store::key_position::KeyPositionCollection;
@@ -39,6 +40,10 @@ impl Stash {
       storage.borrow().warm_cache(&url, &self.buffer.slice_all());
     }
     Ok(())
+  }
+
+  fn size(&self) -> usize {
+    self.buffer.len()
   }
 }
 
@@ -94,6 +99,12 @@ impl StashIndex {
 impl Index for StashIndex {
   fn predict(&self, key: &KeyT) -> GResult<KeyPositionRange> {
     Ok(KeyPositionRange::from_bound(*key, *key, self.start_position, self.end_position))
+  }
+
+  fn get_load(&self) -> Vec<LoadDistribution> {
+    let stash_size = self.stashes.iter().map(|stash| stash.size()).sum();
+    let position_range = self.end_position - self.start_position;
+    vec![LoadDistribution::exact(std::cmp::max(stash_size, position_range))]
   }
 }
 

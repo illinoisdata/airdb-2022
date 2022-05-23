@@ -16,19 +16,19 @@ azure_core = "0.1.1"
 azure_storage = "0.1.0"
 azure_storage_blobs = "0.1.0"
 bitvec = "1.0.0"
-bson = "2.0.0"
+# bson = "2.0.0"
 byteorder = "1.4.3"
 bytes = "1.1.0"
 derive_more = "0.99.17"
 env_logger = "0.9.0"
-erased-serde = "0.3"
-flexbuffers = "2.0.0"
-futures = "0.3.21"
+# erased-serde = "0.3"
+# flexbuffers = "2.0.0"
+# futures = "0.3.21"
 itertools = "0.10.3"
 log = "0.4.14"
-lru = "0.7.3"
+# lru = "0.7.3"
 memmap2 = "0.5.2"
-num = "0.4.0"
+# num = "0.4.0"
 openssl = { version = "0.10.38", features = ["vendored"] }
 postcard = { version = "0.7.2", features = ["use-std"] }
 rand = "0.8.3"
@@ -36,18 +36,21 @@ rand_pcg = "0.3.1"
 rayon = "1.5.1"
 sscanf = "0.1.4"
 serde = { version = "1.0", features = ["derive", "rc"] }
-serde_derive = "1.0.133"
+# serde_derive = "1.0.133"
 serde_json = { version = "1.0" }
-simple-error = "0.2.3"
+# simple-error = "0.2.3"
 structopt = { version = "0.3", default-features = false }
 tempfile = "3"
 test-log = "0.2.8"
 tokio = "1.16.1"
+tracing = "0.1.34"
+tracing-subscriber = "0.3.11"
+tracing-timing = "0.6.0"
 url = "2.2.2"
 
-[[bin]]
-name = "profile_storage"
-path = "src/bin/profile_storage.rs"
+# [[bin]]
+# name = "profile_storage"
+# path = "src/bin/profile_storage.rs"
 
 [[bin]]
 name = "sosd_keyset"

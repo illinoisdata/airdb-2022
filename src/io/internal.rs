@@ -266,6 +266,7 @@ impl ExternalStorage {
     if range.length <= self.total_page * self.page_size {
       // warm up cache
       self.prepare_cache(&mut page_key, range)?;
+      tracing::trace!("internal_preparecache");
 
       // collect page bytes
       let mut view = SharedByteView::default();
@@ -277,6 +278,7 @@ impl ExternalStorage {
         let page_r = std::cmp::min(page_cache.len(), (range.offset + range.length).saturating_sub(page_range.offset));
         view.push(page_cache.slice(page_l, page_r - page_l))
       }
+      tracing::trace!("internal_compileview");
       Ok(view)
     } else {
       // range too large for the cache

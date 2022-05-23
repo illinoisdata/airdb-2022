@@ -1,6 +1,7 @@
+use std::fmt::Debug;
 use std::time::Duration;
 
-pub trait StorageProfile: Sync {
+pub trait StorageProfile: Sync + Debug {
   // estimate cost for a read of size (read_size in bytes), output in nanoseconds
   fn cost(&self, read_size: usize) -> Duration;
 
@@ -23,6 +24,7 @@ impl StorageProfile for Latency {
 
 /* Bandwidth (linear) */
 
+#[derive(Debug)]
 pub struct Bandwidth {
   nspb: f64,  // in ns per byte
 }
@@ -42,6 +44,7 @@ impl StorageProfile for Bandwidth {
 
 /* Latency (constant) */
 
+#[derive(Debug)]
 pub struct AffineStorageProfile {
   latency: Duration,
   bandwidth: Bandwidth,

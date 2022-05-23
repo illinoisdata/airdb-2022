@@ -5,6 +5,7 @@ use crate::common::error::GResult;
 use crate::index::Index;
 use crate::index::IndexMeta;
 use crate::index::IndexMetaserde;
+use crate::index::LoadDistribution;
 use crate::index::PartialIndex;
 use crate::index::PartialIndexMeta;
 use crate::index::PartialIndexMetaserde;
@@ -36,9 +37,13 @@ impl PiecewiseIndex {
 
   fn predict_from_reader(&self, reader: Box<dyn DataStoreReader>, key: &KeyT) -> GResult<KeyPositionRange> {
     let model_kb = PiecewiseIndex::select_relevant_kb(reader, key)?;
+    tracing::trace!("piecewise_find");
     let model = self.model_serde.reconstruct(&model_kb.buffer[..])?;
+    tracing::trace!("piecewise_reconstruct");
     log::trace!("Using model {:?} after key= {}", model, model_kb.key);
-    Ok(model.predict(key))
+    let kpr = model.predict(key);
+    tracing::trace!("piecewise_predict");
+    Ok(kpr)
   }
 
   fn select_relevant_kb(reader: Box<dyn DataStoreReader>, key: &KeyT) -> GResult<KeyBuffer> {
@@ -58,6 +63,10 @@ impl Index for PiecewiseIndex {
     let reader = self.data_store.read_all()?;
     log::trace!("Received piecewise buffer");  // TEMP
     self.predict_from_reader(reader, key)
+  }
+
+  fn get_load(&self) -> Vec<LoadDistribution> {
+    self.model_serde.get_load()
   }
 }
 

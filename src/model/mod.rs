@@ -24,14 +24,16 @@ pub trait Model: Debug {
 
 /* Model Deserializer */
 
-pub trait ModelRecon: ModelReconMetaserde + Debug {
+pub trait ModelRecon: ModelReconMetaserde + Debug + Send {
   fn reconstruct(&self, buffer: &[u8]) -> GResult<Box<dyn Model>>;
   fn get_load(&self) -> Vec<LoadDistribution>;
+
+  fn combine_with(&mut self, other: &dyn ModelRecon);
+  fn to_typed(&self) -> ModelReconMeta;
 }
 
 #[derive(Serialize, Deserialize)]
 pub enum ModelReconMeta {
-  DoubleLinear { meta: linear::DoubleLinearModelReconMeta },
   Step { meta: Box<step::StepModelReconMeta> },
   Band { meta: Box<band::BandModelReconMeta> },  // BandModelReconMeta is large
 }
@@ -43,7 +45,6 @@ pub trait ModelReconMetaserde {
 impl ModelReconMeta {
   pub fn from_meta(meta: ModelReconMeta, ctx: &Context) -> GResult<Box<dyn ModelRecon>> {
     let store = match meta {
-      ModelReconMeta::DoubleLinear { meta } => Box::new(linear::DoubleLinearModelRecon::from_meta(meta, ctx)?) as Box<dyn ModelRecon>,
       ModelReconMeta::Step { meta } => Box::new(step::StepModelRecon::from_meta(*meta, ctx)?) as Box<dyn ModelRecon>,
       ModelReconMeta::Band { meta } => Box::new(band::BandModelRecon::from_meta(*meta, ctx)?) as Box<dyn ModelRecon>,
     };
@@ -96,6 +97,5 @@ pub trait ModelDrafter: Sync + Debug {
 
 pub mod toolkit;
 pub mod load;
-pub mod linear;
 pub mod step;
 pub mod band;

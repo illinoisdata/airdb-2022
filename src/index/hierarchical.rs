@@ -42,8 +42,13 @@ impl Index for StackIndex {
     let kr = self.upper_index.predict(key)?;
     self.lower_index.predict_within(&kr)
   }
+
+  fn get_load(&self) -> Vec<LoadDistribution> {
+    [self.upper_index.get_load(), self.lower_index.get_load()].concat()
+  }
 }
 
+#[derive(Debug)]
 pub struct BalanceStackIndexBuilder<'a> {
   storage: Rc<RefCell<ExternalStorage>>,
   drafter: Box<dyn ModelDrafter>,
@@ -111,6 +116,7 @@ impl<'a> IndexBuilder for BalanceStackIndexBuilder<'a> {
   }
 }
 
+#[derive(Debug)]
 pub struct BoundedTopStackIndexBuilder<'a> {
   storage: Rc<RefCell<ExternalStorage>>,
   drafter: Box<dyn ModelDrafter>,
@@ -198,16 +204,22 @@ impl StackIndex {  // for Metaserde
   }
 }
 
+#[derive(Debug)]
 pub struct ExploreStackIndexBuilder<'a> {
   storage: Rc<RefCell<ExternalStorage>>,
   drafter: Box<dyn ModelDrafter>,
   profile: &'a dyn StorageProfile,
   prefix_url: Url,
+
+  // For generating kps without actually writing to storage
   dummy_storage: Rc<RefCell<ExternalStorage>>,
   dummy_prefix_url: Url,
+
+  target_layers: Option<usize>,  // if set, only build index with many layers
 }
 
 impl<'a> ExploreStackIndexBuilder<'a> {
+  // explore all model drafts in many layers
   pub fn new(
     storage: &Rc<RefCell<ExternalStorage>>,
     drafter: Box<dyn ModelDrafter>,
@@ -225,6 +237,30 @@ impl<'a> ExploreStackIndexBuilder<'a> {
       prefix_url,
       dummy_storage,
       dummy_prefix_url: Url::parse("dummy:///index").unwrap(),
+      target_layers: None,
+    }
+  }
+
+  // build at an exactly target number of layers
+  pub fn exact_layers(
+    storage: &Rc<RefCell<ExternalStorage>>,
+    drafter: Box<dyn ModelDrafter>,
+    profile: &'a dyn StorageProfile,
+    prefix_url: Url,
+    target_layers: usize,
+  ) -> ExploreStackIndexBuilder<'a> {
+    let dummy_storage = Rc::new(RefCell::new(ExternalStorage::new()
+      .with("dummy".to_string(), Box::new(DummyAdaptor::default()))
+      .expect("Failed to initiate dummy storage")
+    ));
+    ExploreStackIndexBuilder {
+      storage: Rc::clone(storage),
+      drafter,
+      profile,
+      prefix_url,
+      dummy_storage,
+      dummy_prefix_url: Url::parse("dummy:///index").unwrap(),
+      target_layers: Some(target_layers),
     }
   }
 
@@ -236,9 +272,17 @@ impl<'a> ExploreStackIndexBuilder<'a> {
       // .map(|load| load.percentile(50.0))
       .collect()
   }
-}
 
-// static mut MAX_LAYER_IDX: usize = 0;
+  fn should_build(&self, no_index_cost: &Duration, ideal_index_cost: &Duration, layer_idx: usize) -> bool {
+    if let Some(target_layers) = self.target_layers {
+      // keep building until having target_layers (i.e. construct from exact_layers)
+      layer_idx <= target_layers
+    } else {
+      // if there is a chance that an index is beneficial (i.e. construct from new)
+      ideal_index_cost < no_index_cost
+    }
+  }
+}
 
 impl<'a> ExploreStackIndexBuilder<'a> {
   pub fn ens_at_layer(  // explore & stack, at layer
@@ -250,22 +294,16 @@ impl<'a> ExploreStackIndexBuilder<'a> {
     let no_index_cost = self.profile.cost(kps.total_bytes());
     let ideal_index_cost = self.profile.sequential_cost(&[1, 1]);
 
-    // unsafe {
-    //   if MAX_LAYER_IDX < layer_idx {
-    //     MAX_LAYER_IDX = layer_idx;
-    //     log::info!("MAX_LAYER_IDX= {}, total_bytes= {}", MAX_LAYER_IDX, kps.total_bytes());
-    //   }
-    // }
-
-    // if there is a chance that an index is beneficial
-    if ideal_index_cost < no_index_cost {
+    if self.should_build(&no_index_cost, &ideal_index_cost, layer_idx) {
       let mut maybe_drafts = None;
-      for model_draft in self.drafter.draft_many(kps, self.profile).into_iter() {
+      let mut drafts = self.drafter.draft_many(kps, self.profile);
+      drafts.sort_by_key(|draft| draft.cost);
+      for model_draft in drafts.into_iter().take(5) {
         // calculate cost at this layer
         let current_loads = self.summarize_loads(&model_draft.serde.get_load());
         let current_costs = self.profile.sequential_cost(&current_loads);
         let current_ideal_cost = self.profile.sequential_cost(&[vec![1], current_loads].concat());
-        if current_ideal_cost >= no_index_cost {
+        if !self.should_build(&no_index_cost, &current_ideal_cost, layer_idx) {
           continue;
         }
 
@@ -281,33 +319,43 @@ impl<'a> ExploreStackIndexBuilder<'a> {
         }
 
         // try next layer
-        let (mut model_drafts, upper_cost) = self.ens_at_layer(&current_kps, layer_idx + 1)?;
-        model_drafts.push(model_draft);
-        let total_cost = upper_cost + current_costs;
+        if let Ok((mut model_drafts, upper_cost)) = self.ens_at_layer(&current_kps, layer_idx + 1) {
+          model_drafts.push(model_draft);
+          let total_cost = upper_cost + current_costs;
 
-        // decide whether to use this draft
-        if layer_idx == 1 {
-          self.log_draft("Candidate", &model_drafts, &total_cost);
-        }
-        maybe_drafts = match maybe_drafts {
-          Some((best_drafts, best_cost)) => if best_cost < total_cost {
-            Some((best_drafts, best_cost))
-          } else {
-            Some((model_drafts, total_cost))
-          },
-          None => Some((model_drafts, total_cost))
+          // decide whether to use this draft
+          if layer_idx == 1 {
+            self.log_draft("Candidate", &model_drafts, &total_cost);
+          }
+          maybe_drafts = match maybe_drafts {
+            Some((best_drafts, best_cost)) => if best_cost < total_cost {
+              Some((best_drafts, best_cost))
+            } else {
+              Some((model_drafts, total_cost))
+            },
+            None => Some((model_drafts, total_cost))
+          }
         }
       }
 
       // return if beneficial
       if let Some((model_drafts, best_index_cost)) = maybe_drafts {
-        if best_index_cost < no_index_cost {
+        if self.should_build(&no_index_cost, &best_index_cost, layer_idx) {
           return Ok((model_drafts, best_index_cost))
         }
       }
     }
+
+    // if layer not at target, return error
+    if let Some(target_layers) = self.target_layers {
+      if layer_idx <= target_layers {
+        return Err("Target number of layers is not satisfied".into())
+      }
+    }
+
     // fetching whole data layer is faster than building index, no further index to build
     Ok((Vec::new(), no_index_cost))
+    
   }
 
   fn craft_all(
@@ -337,7 +385,11 @@ impl<'a> ExploreStackIndexBuilder<'a> {
       }))
     } else {
       // no more layer, make the root (no index) layer
-      Ok(Box::new(StashIndex::build(kps, lower_data_store, &self.storage, &self.prefix_url)?))
+      if lower_data_store.is_some() {
+        Ok(Box::new(StashIndex::build(kps, lower_data_store, &self.storage, &self.prefix_url)?))
+      } else {
+        Ok(Box::new(NaiveIndex::build(kps)))
+      }
     }
   }
 

@@ -14,6 +14,7 @@ use crate::index::Index;
 use crate::index::IndexBuilder;
 use crate::index::IndexMeta;
 use crate::meta::Context;
+use crate::model::load::LoadDistribution;
 use crate::store::array_store::ArrayStore;
 use crate::store::array_store::ArrayStoreState;
 use crate::store::key_position::KeyPositionCollection;
@@ -56,9 +57,12 @@ impl SOSDRankDB {
       .as_ref()
       .expect("Index missing, trying to accessing empty data store")
       .predict(&key)?;
+    tracing::trace!("keyrank_index");
     let reader = self.array_store.read_array_within(kpr.offset, kpr.length)?;
+    tracing::trace!("keyrank_buffer");
     log::trace!("received rank buffer in {:?}", kpr);
     let (kb, rank) = reader.first_of_with_rank(key)?;
+    tracing::trace!("keyrank_find");
     if kb.key == key {
       Ok(Some(KeyRank{ key: kb.key, rank }))
     } else {
@@ -109,6 +113,13 @@ impl SOSDRankDB {
       writeln!(&mut keyset_file, "{} {}", kp.key, kp.position / self.array_store.data_size())?;
     }
     Ok(())
+  }
+
+  pub fn get_load(&self) -> Vec<LoadDistribution> {
+    match &self.index {
+      Some(index) => index.get_load(),
+      None => vec![LoadDistribution::exact(self.array_store.read_all_size())],
+    }
   }
 
   fn deserialize_key(&self, dbuffer: &[u8]) -> KeyT {
