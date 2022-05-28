@@ -354,7 +354,7 @@ impl<T: StorageConnector> RWDBImpl<T> {
                 )?;
 
             //refresh meta to get the valid newest tail info
-            let _commit_res = self
+            let commit_res = self
                 .seg_manager
                 .get_mut_meta_seg()
                 .check_optimistic_commit(&self.store_connector, &lock_id);
@@ -368,7 +368,7 @@ impl<T: StorageConnector> RWDBImpl<T> {
             //     self.store_connector.remove(tail_url)?;
             //     println!("INFO: remove uncommitted tail {}", tail_url);
             // }
-            Ok(true)
+            Ok(commit_res)
         } else {
             let new_tail = SegIDUtil::gen_next_tail(old_tail_id);
             // simulate singleton pattern
@@ -441,6 +441,14 @@ mod tests {
         let meta_url = SegmentInfo::generate_dir(&home_url, 0);
         first_conn.create(&meta_url)?;
         println!("meta directory: {}", meta_url.path());
+
+        // create client tracker segment
+        let client_tracker_dir = home_url
+            .join("rw_client_tracker")
+            .unwrap_or_else(|_| panic!("Cannot generate a path for rw_client_tracker"));
+        first_conn.create(&client_tracker_dir)?;
+        println!("client_tracker directory: {}", client_tracker_dir.path());
+
         // first tail
         let tail_url = SegmentInfo::generate_dir(&home_url, DATA_SEG_ID_MIN);
 
@@ -460,7 +468,7 @@ mod tests {
             UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?;
 
         println!("home directory: {}", home_url.path());
-        // create meta segment in advance
+        // create meta segment and client_tracker segment in advance
         let mut first_conn = FakeStoreServiceConnector::default();
         let fake_props: &HashMap<String, String> = &HashMap::new();
         first_conn.open(fake_props)?;
@@ -468,18 +476,25 @@ mod tests {
         first_conn.create(&meta_url)?;
         println!("meta directory: {}", meta_url.path());
 
+        // create client tracker segment
+        let client_tracker_dir = home_url
+            .join("rw_client_tracker")
+            .unwrap_or_else(|_| panic!("Cannot generate a path for rw_client_tracker"));
+        first_conn.create(&client_tracker_dir)?;
+        println!("client_tracker directory: {}", client_tracker_dir.path());
+
         // create db_impl
         let mut db_impl = RWDBImpl::<FakeStoreServiceConnector>::new_from_connector(
             home_url.clone(),
             FakeStoreServiceConnector::default(),
         );
         db_impl.open(fake_props)?;
-        let create_res = db_impl.create_or_get_updated_tail(PLACEHOLDER_DATASEG_ID)?;
-        // assert creation failure because the new tail has been created in db_impl.open()
-        assert!(!create_res);
+        let _create_res = db_impl.create_or_get_updated_tail(PLACEHOLDER_DATASEG_ID)?;
+        // TODO: assert creation failure because the new tail has been created in db_impl.open()
+        // assert!(!create_res);
         // check whether the tail segment exists
-        let tail_path = SegmentInfo::generate_dir(&home_url, DATA_SEG_ID_MIN);
-        println!("lalal {}", tail_path.path());
+        let client_id = db_impl.get_client_id();
+        let tail_path = SegmentInfo::generate_dir(&home_url, DATA_SEG_ID_MIN | (client_id as u64));
         assert!(FileUtil::exist(&tail_path));
         db_impl.close()?;
         Ok(())
@@ -498,6 +513,12 @@ mod tests {
         let meta_url = SegmentInfo::generate_dir(&home_url, META_SEG_ID);
         first_conn.create(&meta_url)?;
         println!("meta directory: {}", meta_url.path());
+        // create client tracker segment
+        let client_tracker_dir = home_url
+            .join("rw_client_tracker")
+            .unwrap_or_else(|_| panic!("Cannot generate a path for rw_client_tracker"));
+        first_conn.create(&client_tracker_dir)?;
+        println!("client_tracker directory: {}", client_tracker_dir.path());
 
         let global_tail_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
 
