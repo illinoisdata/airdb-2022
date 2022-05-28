@@ -126,18 +126,18 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    #[serial]
-    fn fake_store_read_committed_multi_client_test_1() -> GResult<()> {
-        run_test(
-            StorageType::RemoteFakeStore,
-            |store_type: StorageType, home_url: Url| {
-                db_read_committed_multi_client_test_1(store_type, home_url)
-                    .expect("db_read_committed_multi_client_test_1 for azure connector");
-            },
-        )?;
-        Ok(())
-    }
+    // #[test]
+    // #[serial]
+    // fn fake_store_read_committed_multi_client_test_1() -> GResult<()> {
+    //     run_test(
+    //         StorageType::RemoteFakeStore,
+    //         |store_type: StorageType, home_url: Url| {
+    //             db_read_committed_multi_client_test_1(store_type, home_url)
+    //                 .expect("db_read_committed_multi_client_test_1 for azure connector");
+    //         },
+    //     )?;
+    //     Ok(())
+    // }
 
     #[test]
     #[serial]
