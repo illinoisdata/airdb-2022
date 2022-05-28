@@ -36,11 +36,22 @@ pub struct FakeStoreServiceConnector {
     rt: Runtime,
 }
 
+async fn create_channel() -> RefCell<ClientType> {
+    let channel = Channel::from_static("http://[::1]:50051")
+        .connect()
+        .await
+        .expect("failed to create channel to http://[::1]:50051");
+    RefCell::new(FakeStoreServiceClient::new(channel))
+}
+
 impl Default for FakeStoreServiceConnector {
     fn default() -> Self {
+        // let mut new_client: Option<RefCell<ClientType>> = None;
+        let runtime = Runtime::new().expect("Failed to initialize tokio runtime");
+        let new_client = runtime.block_on(create_channel());
         Self {
-            client: None,
-            rt: Runtime::new().expect("Failed to initialize tokio runtime"),
+            client: Some(new_client),
+            rt: runtime,
         }
     }
 }
@@ -175,18 +186,11 @@ impl StorageConnector for FakeStoreServiceConnector {
     /// * `props` - necessary properties to initialize and  open the connection  
     ///
     fn open(&mut self, _props: &HashMap<String, String>) -> GResult<()> {
-        self.rt.block_on(async {
-            // TODO: get connection url from props
-            let channel = Channel::from_static("http://[::1]:50051").connect().await?;
-            self.client = Some(RefCell::new(FakeStoreServiceClient::new(channel)));
-            Ok(())
-        })
+        Ok(())
     }
 
     fn close(&mut self) -> GResult<()> {
-        self.rt.block_on(async {
-            Ok(())
-        })
+        self.rt.block_on(async { Ok(()) })
     }
 
     fn read_all(&self, path: &Url) -> GResult<Vec<u8>> {

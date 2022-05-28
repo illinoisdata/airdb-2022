@@ -4,11 +4,10 @@ use std::{
     rc::Rc,
 };
 
-use crate::common::error::GResult;
+use crate::{common::error::GResult, db::rw_db::ClientID};
 
 use super::airlock::{
-    AirLockCheck, AirLockID, AirLockRequest, AirLockStatus, ClientID, CommitInfo, LockHolder,
-    ResourceID,
+    AirLockCheck, AirLockID, AirLockRequest, AirLockStatus, CommitInfo, LockHolder, ResourceID,
 };
 
 pub trait LockHistoryBuilder {
@@ -50,9 +49,7 @@ impl LockHistoryBuilder for AirLockTracker {
                 .unwrap_or_else(|| panic!("client (id: {} ) not found ", req_client));
             if holder.borrow().is_renewed_req(&req) {
                 // the new request is an renew request
-                holder
-                    .borrow_mut()
-                    .renew_lease(*req.get_request_time());
+                holder.borrow_mut().renew_lease(*req.get_request_time());
                 true
             } else {
                 // in this branch, the new lock request is an acquire request
@@ -147,11 +144,9 @@ impl AirLockTracker {
                 false,
             )));
             res_ids.iter().for_each(|res_id| {
-                self.res_lock_map
-                    .insert(*res_id, Rc::clone(&new_holder));
+                self.res_lock_map.insert(*res_id, Rc::clone(&new_holder));
             });
-            self.client_active_lock_map
-                .insert(*client_id, new_holder);
+            self.client_active_lock_map.insert(*client_id, new_holder);
             true
         } else {
             false
@@ -161,10 +156,9 @@ impl AirLockTracker {
     fn try_acquire(&self, res_id: &ResourceID, req: &AirLockRequest) -> AirLockStatus<AirLockID> {
         match self.res_lock_map.get(res_id) {
             Some(holder) => holder.borrow().valid_acquire(req),
-            None => AirLockStatus::Acquired(AirLockID::new(
-                *req.get_client(),
-                *req.get_request_time(),
-            )),
+            None => {
+                AirLockStatus::Acquired(AirLockID::new(*req.get_client(), *req.get_request_time()))
+            }
         }
     }
 }

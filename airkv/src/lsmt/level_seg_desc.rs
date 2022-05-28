@@ -2,12 +2,10 @@ use std::{cmp::Ordering};
 
 use crate::{
     common::{bytebuffer::ByteBuffer, error::GResult, readbuffer::ReadBuffer, serde::Serde},
-    storage::segment::SegID,
+    storage::{segment::SegID, seg_util::{PLACEHOLDER_DATASEG_ID, SegIDUtil}},
 };
 
 use super::tree_delta::{LevelDelta, TreeDelta};
-
-pub static PLACEHOLDER_DATASEG_ID: SegID = 0;
 
 
 // SegDesc describes a data segment, it won't be used to describe the meta segment
@@ -89,7 +87,14 @@ impl SegDesc {
 
 impl Serde<SegDesc> for SegDesc {
     fn serialize(&self, buff: &mut ByteBuffer) -> GResult<()> {
-        buff.write_u32(self.seg_id);
+        //TODO: find a better way to distinguish optimistic/non-optimistic seg_id
+        let is_optimistic = SegIDUtil::is_optimistic_segid(self.seg_id);
+        buff.write_bool(is_optimistic);
+        if is_optimistic {
+            buff.write_u64(self.seg_id);
+        } else {
+            buff.write_u32(SegIDUtil::get_non_optimistic_segid(self.seg_id));
+        }
         let has_stats = self.min.is_some() && self.max.is_some();
         buff.write_bool(has_stats);
         if has_stats {
@@ -109,7 +114,12 @@ impl Serde<SegDesc> for SegDesc {
     }
 
     fn deserialize(buff: &mut ByteBuffer) -> SegDesc {
-        let seg_id_read = buff.read_u32();
+        let is_optimistic = buff.read_bool();
+        let seg_id_read = if is_optimistic {
+            buff.read_u64()
+        } else {
+            SegIDUtil::from_non_optimistic_segid( buff.read_u32())
+        };
         let has_stat = buff.read_bool();
         if has_stat {
             let min_size = buff.read_u16();

@@ -1,15 +1,17 @@
 use crate::{
     consistency::{
-        airlock::{AirLockRequest, ClientID},
+        airlock::AirLockRequest,
         airlock_tracker::{AirLockTracker, LockHistoryBuilder},
+        optimistic_airlock_tracker::OptimisticAirLockTracker,
     },
     lsmt::{level_seg_desc::LsmTreeDesc, tree_delta::TreeDelta},
-    storage::segment::SegID,
+    storage::segment::SegID, db::rw_db::ClientID,
 };
 
 pub struct MetaCache {
     last_seg_pos: u64,
     airlock_tracker: AirLockTracker,
+    optimistic_airlock_tracker: OptimisticAirLockTracker,
     tree_desc: LsmTreeDesc,
 }
 
@@ -18,6 +20,7 @@ impl MetaCache {
         Self {
             last_seg_pos: 0,
             airlock_tracker: AirLockTracker::new(client_id_new),
+            optimistic_airlock_tracker: OptimisticAirLockTracker::new(client_id_new),
             tree_desc: LsmTreeDesc::default(),
         }
     }
@@ -49,6 +52,10 @@ impl MetaCache {
 
     pub fn get_airlock_tracker_mut(&mut self) -> &mut AirLockTracker {
         &mut self.airlock_tracker
+    }
+
+    pub fn get_optimistic_airlock_tracker_mut(&mut self) -> &mut OptimisticAirLockTracker {
+        &mut self.optimistic_airlock_tracker
     }
 
     pub fn get_airlock_tracker(&self) -> &AirLockTracker {

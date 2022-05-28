@@ -2,12 +2,12 @@ use core::time;
 use std::fmt::{Display, Formatter};
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use uuid::Uuid;
 
 use crate::{
     common::{bytebuffer::ByteBuffer, error::GResult, readbuffer::ReadBuffer, serde::Serde},
+    db::rw_db::ClientID,
     io::storage_connector::StorageConnector,
-    lsmt::{tree_delta::TreeDelta},
+    lsmt::tree_delta::TreeDelta,
     storage::{meta::Meta, seg_util::SegIDUtil, segment::SegID, segment_manager::SegmentManager},
 };
 
@@ -18,8 +18,6 @@ pub static CLIENT_CLOCK_SKEW_IN_SEC: u8 = 10;
 
 // TODO: find efficient type and serialization way for clientid/timestamp
 // TODO: replace timestamp with a incremental number
-// uuid is too long for a lock request
-pub type ClientID = Uuid;
 pub type ResourceID = SegID;
 pub type Timestamp = DateTime<Utc>;
 
@@ -63,13 +61,13 @@ impl Display for AirLockID {
 
 impl Serde<AirLockID> for AirLockID {
     fn serialize(&self, buff: &mut ByteBuffer) -> GResult<()> {
-        buff.write_u128(self.client_id.as_u128());
+        buff.write_u16(self.client_id);
         buff.write_i64(self.start_timestamp.timestamp_millis());
         Ok(())
     }
 
     fn deserialize(buff: &mut ByteBuffer) -> AirLockID {
-        let client_id = Uuid::from_u128(buff.read_u128());
+        let client_id = buff.read_u16();
         let timestamp = Utc.timestamp_millis(buff.read_i64());
         AirLockID::new(client_id, timestamp)
     }
@@ -78,7 +76,6 @@ impl Serde<AirLockID> for AirLockID {
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
-    use uuid::Uuid;
 
     use crate::common::{bytebuffer::ByteBuffer, error::GResult, serde::Serde};
 
@@ -86,7 +83,7 @@ mod tests {
 
     #[test]
     fn airlockid_serde_test() -> GResult<()> {
-        let lock_id = AirLockID::new(Uuid::new_v4(), Utc::now());
+        let lock_id = AirLockID::new(3u16, Utc::now());
         let mut buffer = ByteBuffer::new();
         lock_id.serialize(&mut buffer)?;
         let deserialized_lock = AirLockID::deserialize(&mut buffer);
@@ -149,9 +146,9 @@ impl Serde<AirLockRequest> for AirLockRequest {
         let res_number = self.resource_ids.len();
         buff.write_u8(res_number as u8);
         for i in 0..res_number {
-            buff.write_u32(self.resource_ids[i]);
+            buff.write_u32(SegIDUtil::get_non_optimistic_segid(self.resource_ids[i]));
         }
-        buff.write_u128(self.client_id.as_u128());
+        buff.write_u16(self.client_id);
         buff.write_i64(self.timestamp.timestamp_millis());
         Ok(())
     }
@@ -160,10 +157,10 @@ impl Serde<AirLockRequest> for AirLockRequest {
         let res_number = buff.read_u8() as usize;
         let mut res_ids_read = Vec::with_capacity(res_number);
         for _i in 0..res_number {
-            res_ids_read.push(buff.read_u32());
+            res_ids_read.push(SegIDUtil::from_non_optimistic_segid(buff.read_u32()));
         }
 
-        let client_id_read = Uuid::from_u128(buff.read_u128());
+        let client_id_read = buff.read_u16();
         let timestamp_read = Utc.timestamp_millis(buff.read_i64());
         AirLockRequest::new_with_timestamp(res_ids_read, client_id_read, timestamp_read)
     }
@@ -319,15 +316,21 @@ pub trait CriticalOperation {
 pub struct TailUpdateCO {
     res_ids: Vec<SegID>,
     client_id: ClientID,
+    old_tail: SegID,
 }
 
 impl TailUpdateCO {
-    pub fn new(res_ids_new: Vec<SegID>, client_id_new: ClientID) -> TailUpdateCO {
+    pub fn new(res_ids_new: Vec<SegID>, client_id_new: ClientID, old_tail_new: SegID) -> TailUpdateCO {
         assert!(res_ids_new.len() == 1);
         Self {
             res_ids: res_ids_new,
             client_id: client_id_new,
+            old_tail: old_tail_new,
         }
+    }
+
+    pub fn get_old_tail(&self) -> SegID {
+        self.old_tail
     }
 }
 
@@ -344,7 +347,7 @@ impl CriticalOperation for TailUpdateCO {
         // create new tail
         seg_manager.create_new_tail_seg(conn, new_tail)?;
         // update tree desc: add old tail to level 0 and add a new tail
-        let delta: TreeDelta = TreeDelta::update_tail_delta_from_segid(new_tail);
+        let delta: TreeDelta = TreeDelta::update_tail_delta_from_segid(new_tail, self.get_old_tail());
         // self.seg_manager.append_tree_delta(&delta)
         seg_manager
             .get_mut_meta_seg()
@@ -369,7 +372,7 @@ impl CriticalOperation for TailUpdateCO {
                 // just return true to let the client try to acquire the lock
                 // TODO: find a better way to cope with this case(such as retry refreshing meta )
                 true
-            },
+            }
         }
     }
 }

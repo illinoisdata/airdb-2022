@@ -17,7 +17,13 @@ pub type SegLen = u64;
 pub type BlockNum = u16;
 pub type SegSize = BlockNum;
 
-pub type SegID = u32;
+/**
+ * 1. the first two bits denote segment type
+ * 2. the third to tenth bits denote level number
+ * 3. the eleventh to the 32nd bits denote the pure segment id 
+ * 4. the last 32 bits denote client id (only necessary for optimistic lock strategy)
+ */
+pub type SegID = u64;
 
 pub enum SegmentType {
     MetaSegment = 0,
@@ -63,7 +69,7 @@ impl SegmentInfo {
         Self {
             seg_id: seg_id_new,
             level: level_new,
-            seg_path: SegmentInfo::generate_dir(&home_dir, seg_id_new, level_new),
+            seg_path: SegmentInfo::generate_dir(&home_dir, seg_id_new),
             seg_type: seg_type_new,
         }
     }
@@ -84,7 +90,7 @@ impl SegmentInfo {
     pub fn new_meta(home_dir: Url) -> Self {
         Self {
             seg_id: 0,
-            seg_path: SegmentInfo::generate_dir(&home_dir, 0, 0),
+            seg_path: SegmentInfo::generate_dir(&home_dir, 0),
             level: 0,
             seg_type: SegmentType::MetaSegment,
         }
@@ -114,26 +120,8 @@ impl SegmentInfo {
         self.seg_type.is_data_seg()
     }
 
-    pub fn generate_dir(home_dir: &Url, seg_id: SegID, level: u8) -> Url {
-        if SegIDUtil::is_meta(seg_id) {
-            home_dir
-                .join(&format!("meta_{}", seg_id))
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "Cannot generate a path for home dir {}, seg id {}",
-                        home_dir, seg_id
-                    )
-                })
-        } else {
-            home_dir
-                .join(&format!("data{}_{}", level, seg_id))
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "Cannot generate a path for home dir {}, seg id {} and level {}",
-                        home_dir, seg_id, level
-                    )
-                })
-        }
+    pub fn generate_dir(home_dir: &Url, seg_id: SegID) -> Url {
+        SegIDUtil::get_seg_dir(seg_id, home_dir)
     }
 }
 

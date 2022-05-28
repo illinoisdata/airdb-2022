@@ -1,11 +1,11 @@
 use crate::{
     common::error::GResult,
     io::storage_connector::StorageConnector,
-    storage::{meta::Meta, meta_segment::MetaSegment, segment_manager::SegmentManager},
+    storage::{meta::Meta, meta_segment::MetaSegment, segment_manager::SegmentManager}, db::rw_db::ClientID,
 };
 
 use super::airlock::{
-    AirLockCheck, AirLockID, AirLockRequest, AirLockStatus, ClientID, CriticalOperation, ResourceID,
+    AirLockCheck, AirLockID, AirLockRequest, AirLockStatus, CriticalOperation, ResourceID,
 };
 
 pub struct AirLockManager {}

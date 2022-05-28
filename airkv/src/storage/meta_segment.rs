@@ -8,9 +8,12 @@ use crate::{
         serde::Serde,
     },
     consistency::{
-        airlock::{AirLockCheck, AirLockID, AirLockRequest, AirLockStatus, ClientID, CommitInfo},
+        airlock::{AirLockCheck, AirLockID, AirLockRequest, AirLockStatus, CommitInfo},
         airlock_tracker::{LockHistoryAccessor, LockHistoryBuilder},
+        optimistic_airlock::{OptimisticAirLockID, OptimisticCommitInfo},
+        optimistic_airlock_tracker::{OptimisticLockHistoryAccessor, OptimisticLockHistoryBuilder},
     },
+    db::rw_db::ClientID,
     io::{file_utils::Range, storage_connector::StorageConnector},
     lsmt::level_seg_desc::LsmTreeDesc,
 };
@@ -25,6 +28,7 @@ use super::{
 enum MetaAppendType {
     CommitInfo = 0,
     LockReq = 1,
+    OptimisticCommitInfo = 2,
 }
 
 pub struct MetaSegment {
@@ -65,23 +69,6 @@ impl Meta for MetaSegment {
 
     fn can_acquire_lock_by_cache(&self, req: &AirLockRequest) -> bool {
         self.meta_cache.get_airlock_tracker().can_acquire(req)
-    }
-
-    fn append_commit_info(
-        &self,
-        conn: &dyn StorageConnector,
-        commit_info: CommitInfo,
-    ) -> GResult<()> {
-        let mut buffer = ByteBuffer::new();
-        // write MetaAppendType
-        buffer.write_u8(MetaAppendType::CommitInfo as u8);
-        commit_info.serialize(&mut buffer)?;
-        //TODO: properly deal with append response
-        let res = conn.append(self.seg_info.get_seg_path(), buffer.to_view());
-        match res {
-            AppendRes::Success(_) => Ok(()),
-            x => Err(Box::new(AppendError::new(x.to_string())) as GenericError),
-        }
     }
 
     fn append_lock_request(
@@ -145,6 +132,18 @@ impl Meta for MetaSegment {
                             self.meta_cache.append_tree_delta(commit_info.get_content());
                         }
                     }
+                    z if z == MetaAppendType::OptimisticCommitInfo as u8 => {
+                        let commit_info = OptimisticCommitInfo::deserialize(&mut inc_buffer);
+                        // check if it is a valid commit
+                        if self
+                            .meta_cache
+                            .get_optimistic_airlock_tracker_mut()
+                            .append_commit(&commit_info)
+                        {
+                            // append commit content
+                            self.meta_cache.append_tree_delta(commit_info.get_content());
+                        }
+                    }
                     _ => panic!(
                         "Unexpected meta_append_type {}, only support {} and {} ",
                         meta_append_type,
@@ -164,6 +163,53 @@ impl Meta for MetaSegment {
         self.meta_cache
             .get_airlock_tracker_mut()
             .check_commit(lock_id)
+    }
+
+    fn check_optimistic_commit(
+        &mut self,
+        conn: &dyn StorageConnector,
+        lock_id: &OptimisticAirLockID,
+    ) -> bool {
+        //refresh meta
+        self.refresh_meta(conn).expect("failed to refresh meta");
+        self.meta_cache
+            .get_optimistic_airlock_tracker_mut()
+            .check_commit(lock_id)
+    }
+
+    fn append_commit_info(
+        &self,
+        conn: &dyn StorageConnector,
+        commit_info: CommitInfo,
+    ) -> GResult<()> {
+        let mut buffer = ByteBuffer::new();
+        // write MetaAppendType
+        buffer.write_u8(MetaAppendType::CommitInfo as u8);
+        commit_info.serialize(&mut buffer)?;
+        //TODO: properly deal with append response
+        let res = conn.append(self.seg_info.get_seg_path(), buffer.to_view());
+        match res {
+            AppendRes::Success(_) => Ok(()),
+            x => Err(Box::new(AppendError::new(x.to_string())) as GenericError),
+        }
+    }
+
+    fn append_optimistic_commit_info(
+        &self,
+        conn: &dyn StorageConnector,
+        commit_info: OptimisticCommitInfo,
+    ) -> GResult<()> {
+        let mut buffer = ByteBuffer::new();
+
+        // write MetaAppendType
+        buffer.write_u8(MetaAppendType::OptimisticCommitInfo as u8);
+        commit_info.serialize(&mut buffer)?;
+        //TODO: properly deal with append response
+        let res = conn.append(self.seg_info.get_seg_path(), buffer.to_view());
+        match res {
+            AppendRes::Success(_) => Ok(()),
+            x => Err(Box::new(AppendError::new(x.to_string())) as GenericError),
+        }
     }
 }
 
@@ -194,11 +240,11 @@ mod tests {
     use std::collections::HashMap;
 
     use tempfile::TempDir;
-    use uuid::Uuid;
 
     use crate::{
         common::error::GResult,
         consistency::airlock::{AirLockRequest, CommitInfo},
+        db::rw_db::ClientID,
         io::{
             fake_store_service_conn::FakeStoreServiceConnector, file_utils::UrlUtil,
             storage_connector::StorageConnector,
@@ -222,8 +268,8 @@ mod tests {
         let fake_props: &HashMap<String, String> = &HashMap::new();
         first_conn.open(fake_props)?;
 
-        let fake_seg_id = 0u32;
-        let fake_client_id = Uuid::new_v4();
+        let fake_seg_id = 0u64;
+        let fake_client_id: ClientID = 0u16;
         let temp_dir = TempDir::new()?;
         let fake_path = UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?;
         let mut seg = MetaSegment::new(
@@ -252,7 +298,7 @@ mod tests {
         seg.append_lock_request(&first_conn, &new_lock_req)?;
         let commit_info_1 = CommitInfo::new(
             new_lock_req.get_lock_id(),
-            TreeDelta::update_tail_delta_for_new(new_tail.clone()),
+            TreeDelta::update_tail_delta_for_new(new_tail.clone(), first_tail_id),
         );
         seg.append_commit_info(&first_conn, commit_info_1)?;
 
@@ -265,7 +311,7 @@ mod tests {
         seg.append_lock_request(&first_conn, &new_lock_req_1)?;
         let commit_info_2 = CommitInfo::new(
             new_lock_req_1.get_lock_id(),
-            TreeDelta::update_tail_delta_for_new(new_tail_1),
+            TreeDelta::update_tail_delta_for_new(new_tail_1, new_tail_id),
         );
         seg.append_commit_info(&first_conn, commit_info_2)?;
         assert_eq!(new_tail_id_1, seg.get_refreshed_tail(&first_conn)?);
