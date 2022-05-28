@@ -7,7 +7,7 @@ mod tests {
         panic,
         sync::{Arc, RwLock},
         thread::{self, JoinHandle},
-        time::{Instant, Duration},
+        time::{Duration, Instant},
     };
 
     use arrayvec::ArrayVec;
@@ -74,6 +74,10 @@ mod tests {
         util_conn.create(&home_url)?;
         // create the meta segment in advance
         create_meta_segment(&home_url, util_conn.as_ref()).expect("Failed to create meta segment");
+        // create wr client tracker segment in advance
+        create_client_tracker_segment(&home_url, util_conn.as_ref())
+            .expect("Failed to create client_tracker segment");
+        // TODO: create compact client tracker segment in adavance
         Ok((home_url, util_conn))
     }
 
@@ -122,18 +126,18 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    #[serial]
-    fn fake_store_read_committed_multi_client_test_1() -> GResult<()> {
-        run_test(
-            StorageType::RemoteFakeStore,
-            |store_type: StorageType, home_url: Url| {
-                db_read_committed_multi_client_test_1(store_type, home_url)
-                    .expect("db_read_committed_multi_client_test_1 for azure connector");
-            },
-        )?;
-        Ok(())
-    }
+    // #[test]
+    // #[serial]
+    // fn fake_store_read_committed_multi_client_test_1() -> GResult<()> {
+    //     run_test(
+    //         StorageType::RemoteFakeStore,
+    //         |store_type: StorageType, home_url: Url| {
+    //             db_read_committed_multi_client_test_1(store_type, home_url)
+    //                 .expect("db_read_committed_multi_client_test_1 for azure connector");
+    //         },
+    //     )?;
+    //     Ok(())
+    // }
 
     #[test]
     #[serial]
@@ -201,9 +205,23 @@ mod tests {
         // create meta segment
         println!("home directory: {}", home_url.path());
         // meta segment
-        let meta_url = SegmentInfo::generate_dir(home_url, META_SEG_ID, 0);
+        let meta_url = SegmentInfo::generate_dir(home_url, META_SEG_ID);
         conn.create(&meta_url)?;
         println!("meta directory: {}", meta_url.path());
+        Ok(())
+    }
+
+    // create client tracker segment in advance and return home directory
+    fn create_client_tracker_segment(home_url: &Url, conn: &dyn StorageConnector) -> GResult<()> {
+        // create client tracker segment
+        let client_tracker_dir = home_url
+            .join("rw_client_tracker")
+            .unwrap_or_else(|_| panic!("Cannot generate a path for rw_client_tracker"));
+        conn.create(&client_tracker_dir)?;
+        println!(
+            "client_tracker seg directory: {}",
+            client_tracker_dir.path()
+        );
         Ok(())
     }
 
@@ -385,67 +403,67 @@ mod tests {
     }
 
     fn db_read_committed_multi_client_test_1(store_type: StorageType, home: Url) -> GResult<()> {
-             // multiple clients write and read
-             let handles: Vec<JoinHandle<()>> = (0..10)
-             .map(|_x| {
-                 let home_url = home.clone();
-                 thread::spawn(move || {
-                     println!("client {:?}: start ...", thread::current().id());
-                     // create db
-                     let mut db = DBFactory::new_rwdb(home_url, store_type);
-                     let mut fake_props: HashMap<String, String> = HashMap::new();
-                     fake_props.insert("SEG_BLOCK_NUM_LIMIT".to_string(), "500".to_string());
- 
-                     db.open(&fake_props).expect("db.open() failed");
- 
-                     let mut rng = rand::thread_rng();
-                     let row_number: usize = db.get_props().get_seg_block_num_limit() as usize + 100;
- 
-                     let mut put_time: u128 = 0;
-                     let mut get_time: u128 = 0;
-                     (0..row_number).for_each(|_i| {
-                         let mut random_part = vec![];
-                         random_part.extend(db.get_client_id().as_bytes());
-                         random_part.extend(gen_random_bytes(&mut rng, 10));
-                         let key = random_part;
-                         let value = gen_random_bytes(&mut rng, 1024);
-                         let key_cp = key.clone();
-                         let value_cp = value.clone();
- 
-                         let current = Instant::now();
-                         db.put(key, value).expect("put entry failure");
-                         put_time += current.elapsed().as_millis();
- 
-                         let now = Instant::now();
-                         let search_value = db
-                             .get(&key_cp)
-                             .expect("error found during searching the value");
-                         get_time += now.elapsed().as_millis();
- 
-                         assert!(search_value.is_some());
-                         assert_eq!(value_cp, search_value.unwrap().get_value_slice());
-                     });
- 
-                     println!(
-                         "Thread {:?}: avg query latency for put is {} ms",
-                         thread::current().id(),
-                         put_time as f64 / row_number as f64
-                     );
- 
-                     println!(
-                         "Thread {:?}: avg query latency for get is {} ms",
-                         thread::current().id(),
-                         get_time as f64 / row_number as f64
-                     );
-                     db.close().expect("db close failed");
-                 })
-             })
-             .collect::<_>();
- 
-         handles
-             .into_iter()
-             .for_each(|handle| handle.join().expect("join failure"));
-         Ok(())
+        // multiple clients write and read
+        let handles: Vec<JoinHandle<()>> = (0..10)
+            .map(|_x| {
+                let home_url = home.clone();
+                thread::spawn(move || {
+                    println!("client {:?}: start ...", thread::current().id());
+                    // create db
+                    let mut db = DBFactory::new_rwdb(home_url, store_type);
+                    let mut fake_props: HashMap<String, String> = HashMap::new();
+                    fake_props.insert("SEG_BLOCK_NUM_LIMIT".to_string(), "500".to_string());
+
+                    db.open(&fake_props).expect("db.open() failed");
+
+                    let mut rng = rand::thread_rng();
+                    let row_number: usize = db.get_props().get_seg_block_num_limit() as usize + 100;
+
+                    let mut put_time: u128 = 0;
+                    let mut get_time: u128 = 0;
+                    (0..row_number).for_each(|_i| {
+                        let mut random_part = vec![];
+                        random_part.extend(db.get_client_id().to_be_bytes());
+                        random_part.extend(gen_random_bytes(&mut rng, 10));
+                        let key = random_part;
+                        let value = gen_random_bytes(&mut rng, 1024);
+                        let key_cp = key.clone();
+                        let value_cp = value.clone();
+
+                        let current = Instant::now();
+                        db.put(key, value).expect("put entry failure");
+                        put_time += current.elapsed().as_millis();
+
+                        let now = Instant::now();
+                        let search_value = db
+                            .get(&key_cp)
+                            .expect("error found during searching the value");
+                        get_time += now.elapsed().as_millis();
+
+                        assert!(search_value.is_some());
+                        assert_eq!(value_cp, search_value.unwrap().get_value_slice());
+                    });
+
+                    println!(
+                        "Thread {:?}: avg query latency for put is {} ms",
+                        thread::current().id(),
+                        put_time as f64 / row_number as f64
+                    );
+
+                    println!(
+                        "Thread {:?}: avg query latency for get is {} ms",
+                        thread::current().id(),
+                        get_time as f64 / row_number as f64
+                    );
+                    db.close().expect("db close failed");
+                })
+            })
+            .collect::<_>();
+
+        handles
+            .into_iter()
+            .for_each(|handle| handle.join().expect("join failure"));
+        Ok(())
     }
 
     // multiple write clients, multiple read clients
@@ -479,7 +497,7 @@ mod tests {
 
                         (0..row_number).for_each(|_i| {
                             let mut random_part = vec![];
-                            random_part.extend(db.get_client_id().as_bytes());
+                            random_part.extend(db.get_client_id().to_be_bytes());
                             random_part.extend(gen_random_bytes(&mut rng, 10));
                             let key = random_part;
                             let key_clone = key.clone();

@@ -1,13 +1,13 @@
 use std::{collections::HashMap, fmt::Debug};
 
 use url::Url;
-use uuid::Uuid;
 
 use crate::{
     common::error::{AppendError, GResult},
     consistency::{
-        airlock::{ClientID, CriticalOperation, TailUpdateCO},
+        airlock::{CriticalOperation, TailUpdateCO},
         airlock_manager::AirLockManager,
+        optimistic_airlock::{OptimisticAirLockID, OptimisticCommitInfo},
         snapshot::Snapshot,
     },
     io::{
@@ -16,6 +16,7 @@ use crate::{
         local_storage_conn::LocalStorageConnector,
         storage_connector::{StorageConnector, StorageType},
     },
+    lsmt::tree_delta::TreeDelta,
     storage::{
         data_entry::{AppendRes, EntryAccess},
         meta::Meta,
@@ -25,26 +26,28 @@ use crate::{
     },
 };
 
+// the first bit denotes rw_client or compact client: 0 is rw_client; 1 is compact_client
+// the following bits denotes the real client id
+pub type ClientID = u16;
 pub type Key = Vec<u8>;
 pub type Value = Vec<u8>;
+pub static FAKE_CLIENT_ID: ClientID = 0;
 
 pub struct DBFactory {}
 
 impl DBFactory {
     pub fn new_rwdb(home_dir_new: Url, store_type: StorageType) -> Box<dyn RWDB> {
         match store_type {
-            StorageType::AzureStore => {
-                Box::new(RWDBImpl::<AzureConnector>::new_from_connector(
-                    home_dir_new,
-                    AzureConnector::default(),
-                ))
-            },
+            StorageType::AzureStore => Box::new(RWDBImpl::<AzureConnector>::new_from_connector(
+                home_dir_new,
+                AzureConnector::default(),
+            )),
             StorageType::RemoteFakeStore => {
                 Box::new(RWDBImpl::<FakeStoreServiceConnector>::new_from_connector(
                     home_dir_new,
                     FakeStoreServiceConnector::default(),
                 ))
-            },
+            }
             StorageType::LocalFakeStore => {
                 Box::new(RWDBImpl::<LocalStorageConnector>::new_from_connector(
                     home_dir_new,
@@ -54,36 +57,61 @@ impl DBFactory {
         }
     }
 
-
     pub fn new_rwdb_from_str(home_dir: String, store_type: String) -> Box<dyn RWDB> {
-       let home_dir_new = Url::parse(&home_dir).unwrap_or_else(|_| panic!("parse url error: the home dir is {}", home_dir));
+        let home_dir_new = Url::parse(&home_dir)
+            .unwrap_or_else(|_| panic!("parse url error: the home dir is {}", home_dir));
         match store_type.as_str() {
-            "AzureStore" => {
-                Box::new(RWDBImpl::<AzureConnector>::new_from_connector(
-                    home_dir_new,
-                    AzureConnector::default(),
-                ))
-            },
+            "AzureStore" => Box::new(RWDBImpl::<AzureConnector>::new_from_connector(
+                home_dir_new,
+                AzureConnector::default(),
+            )),
             "RemoteFakeStore" => {
                 Box::new(RWDBImpl::<FakeStoreServiceConnector>::new_from_connector(
                     home_dir_new,
                     FakeStoreServiceConnector::default(),
                 ))
-            },
-            "LocalFakeStore" => {
-                Box::new(RWDBImpl::<LocalStorageConnector>::new_from_connector(
-                    home_dir_new,
-                    LocalStorageConnector::default(),
-                ))
             }
+            "LocalFakeStore" => Box::new(RWDBImpl::<LocalStorageConnector>::new_from_connector(
+                home_dir_new,
+                LocalStorageConnector::default(),
+            )),
             store_type => {
                 panic!("wrong storage type {}", store_type)
-            } 
+            }
         }
     }
 
-    pub fn gen_client_id() -> ClientID {
-        Uuid::new_v4()
+    pub fn gen_client_id(home_dir: &Url, conn: &dyn StorageConnector, is_rw: bool) -> ClientID {
+        if is_rw {
+            // read/write client
+            let client_tracker_dir = home_dir
+                .join("rw_client_tracker")
+                .unwrap_or_else(|_| panic!("Cannot generate a path for rw_client_tracker"));
+
+            // append a fake block and get the current block number of client_tracker_seg as the client id
+            let client_id = match conn.append(&client_tracker_dir, &[0u8]) {
+                AppendRes::Success(block_num) => block_num,
+                res => {
+                    println!("ERROR: failed to append to client_tracker_seg");
+                    panic!("failed to get client id: {}", res)
+                }
+            };
+            client_id
+        } else {
+            // compact client
+            // read/write client
+            let client_tracker_dir = home_dir
+                .join("compact_client_tracker")
+                .unwrap_or_else(|_| panic!("Cannot generate a path for compact_client_tracker"));
+
+            // append a fake block and get the current block number of client_tracker_seg as the client id
+            let client_id = match conn.append(&client_tracker_dir, &[0u8]) {
+                AppendRes::Success(block_num) => block_num,
+                res => panic!("failed to get client id: {}", res),
+            };
+            assert!(client_id < (1u16 << 15));
+            client_id | (1u16 << 15)
+        }
     }
 }
 
@@ -141,10 +169,12 @@ pub struct RWDBImpl<T: StorageConnector> {
 
 impl<T: StorageConnector> Debug for RWDBImpl<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RWDBImpl").field("client_id", &self.client_id).field("props", &self.props).finish()
+        f.debug_struct("RWDBImpl")
+            .field("client_id", &self.client_id)
+            .field("props", &self.props)
+            .finish()
     }
 }
-
 
 impl<T: StorageConnector> Drop for RWDBImpl<T> {
     fn drop(&mut self) {
@@ -154,7 +184,9 @@ impl<T: StorageConnector> Drop for RWDBImpl<T> {
 
 impl<T: StorageConnector> RWDBImpl<T> {
     pub fn new_from_connector(home_dir_new: Url, connector_new: T) -> RWDBImpl<T> {
-        let client_id_new = DBFactory::gen_client_id();
+        // get client id
+        let client_id_new = DBFactory::gen_client_id(&home_dir_new, &connector_new, true);
+        println!("INFO: create a new client with id {}", client_id_new);
         Self {
             store_connector: connector_new,
             seg_manager: SegmentManager::new(client_id_new, home_dir_new),
@@ -165,8 +197,6 @@ impl<T: StorageConnector> RWDBImpl<T> {
 }
 
 impl<T: StorageConnector> RWDB for RWDBImpl<T> {
-    // impl<'b> RWDB for RWDBImpl<'b> {
-    // fn open(&'b mut self, props: &HashMap<String, String>) -> GResult<()> {
     fn open(&mut self, props: &HashMap<String, String>) -> GResult<()> {
         match props.get("SEG_BLOCK_NUM_LIMIT") {
             Some(block_num) => self.props.set_seg_block_num_limit(block_num.parse()?),
@@ -176,7 +206,6 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
         // TODO: find a way to create the meta segment
         // for now, just assume we have already created the meta before launching the client
         // refresh meta
-
         self.seg_manager.refresh_meta(&self.store_connector)?;
         if !self.seg_manager.has_valid_tail() {
             // create the tail segment if necessary
@@ -198,7 +227,6 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
         let tail_id = tail_seg.get_segid();
         let entries_slice: &[Entry] = &entries;
         match tail_seg.append_entries(&self.store_connector, entries_slice.iter()) {
-            // match self.seg_manager.append_to_tail(tail_seg, entries) {
             AppendRes::Success(size) => {
                 if size < self.props.get_seg_block_num_limit() {
                     Ok(())
@@ -249,16 +277,6 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
             // println!("try to get active tail");
             tail_props = self.try_get_tail_props_updated()?;
         }
-        // println!(
-        //     "XXX {:?} current tail props {:?} for tail {}",
-        //     thread::current().id(),
-        //     tail_props,
-        //     SegmentInfo::generate_dir(
-        //         self.seg_manager.get_home_dir(),
-        //         self.seg_manager.get_cached_tail_id(),
-        //         0
-        //     )
-        // );
         self.get_from_snapshot(self.gen_snapshot_from_cache(tail_props), key)
     }
 
@@ -314,33 +332,68 @@ impl<T: StorageConnector> RWDBImpl<T> {
     // otherwise create a new tail
     // return => whether the new tail has been created by the current client
     fn create_or_get_updated_tail(&mut self, old_tail_id: SegID) -> GResult<bool> {
-        let new_tail = SegIDUtil::gen_next_tail(old_tail_id);
-        // println!(
-        //     "XXX create_or_get_updated_tail for tail {} in client {}",
-        //     SegmentInfo::generate_dir(self.seg_manager.get_home_dir(), new_tail, 0),
-        //     self.client_id
-        // );
-        let tail_update_co = TailUpdateCO::new(vec![new_tail], self.client_id);
-        let mut run_success: bool = false;
-        loop {
-            let is_uninit =
-                tail_update_co.check_uninit(&self.store_connector, &mut self.seg_manager);
-
-            if !is_uninit {
-                break;
-            }
-            run_success = AirLockManager::run_with_single_lock(
-                &self.store_connector,
-                &mut self.seg_manager,
-                &tail_update_co,
+        // TODO: use parameters to trigger optimistic strategy
+        if true {
+            // create a tail and append the new tail info to the meta segment
+            let new_tail_leading = SegIDUtil::gen_next_tail(old_tail_id);
+            let new_tail = new_tail_leading | (self.client_id as SegID);
+            // create new tail
+            self.seg_manager
+                .create_new_tail_seg(&self.store_connector, new_tail)?;
+            // update tree desc: add old tail to level 0 and add a new tail
+            let delta: TreeDelta = TreeDelta::update_tail_delta_from_segid(new_tail, old_tail_id);
+            let lock_id = OptimisticAirLockID::new(
+                self.client_id,
+                vec![SegIDUtil::get_resid_from_segid(new_tail)],
             );
+            self.seg_manager
+                .get_mut_meta_seg()
+                .append_optimistic_commit_info(
+                    &self.store_connector,
+                    OptimisticCommitInfo::new(lock_id.clone(), delta),
+                )?;
 
-            if run_success {
-                break;
+            //refresh meta to get the valid newest tail info
+            let commit_res = self
+                .seg_manager
+                .get_mut_meta_seg()
+                .check_optimistic_commit(&self.store_connector, &lock_id);
+
+            // TODO: remove the tail when the commit failed .
+            // if commit_res {
+            //     let tail_url = &SegIDUtil::get_seg_dir(new_tail, self.seg_manager.get_home_dir());
+            //     println!("INFO: successfully commit a new tail {}", tail_url);
+            // } else {
+            //     let tail_url = &SegIDUtil::get_seg_dir(new_tail, self.seg_manager.get_home_dir());
+            //     self.store_connector.remove(tail_url)?;
+            //     println!("INFO: remove uncommitted tail {}", tail_url);
+            // }
+            Ok(commit_res)
+        } else {
+            let new_tail = SegIDUtil::gen_next_tail(old_tail_id);
+            // simulate singleton pattern
+            let tail_update_co = TailUpdateCO::new(vec![new_tail], self.client_id, old_tail_id);
+            let mut run_success: bool = false;
+            loop {
+                let is_uninit =
+                    tail_update_co.check_uninit(&self.store_connector, &mut self.seg_manager);
+
+                if !is_uninit {
+                    break;
+                }
+                run_success = AirLockManager::run_with_single_lock(
+                    &self.store_connector,
+                    &mut self.seg_manager,
+                    &tail_update_co,
+                );
+
+                if run_success {
+                    break;
+                }
             }
-        }
 
-        Ok(run_success)
+            Ok(run_success)
+        }
     }
 }
 
@@ -367,9 +420,8 @@ mod tests {
             file_utils::{FileUtil, UrlUtil},
             storage_connector::{StorageConnector, StorageType},
         },
-        lsmt::level_seg_desc::PLACEHOLDER_DATASEG_ID,
         storage::{
-            seg_util::{DATA_SEG_ID_MIN, META_SEG_ID},
+            seg_util::{DATA_SEG_ID_MIN, META_SEG_ID, PLACEHOLDER_DATASEG_ID},
             segment::SegmentInfo,
         },
     };
@@ -386,11 +438,19 @@ mod tests {
         let fake_props: &HashMap<String, String> = &HashMap::new();
         first_conn.open(fake_props)?;
         // meta segment
-        let meta_url = SegmentInfo::generate_dir(&home_url, 0, 0);
+        let meta_url = SegmentInfo::generate_dir(&home_url, 0);
         first_conn.create(&meta_url)?;
         println!("meta directory: {}", meta_url.path());
+
+        // create client tracker segment
+        let client_tracker_dir = home_url
+            .join("rw_client_tracker")
+            .unwrap_or_else(|_| panic!("Cannot generate a path for rw_client_tracker"));
+        first_conn.create(&client_tracker_dir)?;
+        println!("client_tracker directory: {}", client_tracker_dir.path());
+
         // first tail
-        let tail_url = SegmentInfo::generate_dir(&home_url, DATA_SEG_ID_MIN, 0);
+        let tail_url = SegmentInfo::generate_dir(&home_url, DATA_SEG_ID_MIN);
 
         first_conn.create(&tail_url)?;
 
@@ -408,13 +468,20 @@ mod tests {
             UrlUtil::url_from_path(temp_dir.path().join("test-file.bin").as_path())?;
 
         println!("home directory: {}", home_url.path());
-        // create meta segment in advance
+        // create meta segment and client_tracker segment in advance
         let mut first_conn = FakeStoreServiceConnector::default();
         let fake_props: &HashMap<String, String> = &HashMap::new();
         first_conn.open(fake_props)?;
-        let meta_url = SegmentInfo::generate_dir(&home_url, META_SEG_ID, 0);
+        let meta_url = SegmentInfo::generate_dir(&home_url, META_SEG_ID);
         first_conn.create(&meta_url)?;
         println!("meta directory: {}", meta_url.path());
+
+        // create client tracker segment
+        let client_tracker_dir = home_url
+            .join("rw_client_tracker")
+            .unwrap_or_else(|_| panic!("Cannot generate a path for rw_client_tracker"));
+        first_conn.create(&client_tracker_dir)?;
+        println!("client_tracker directory: {}", client_tracker_dir.path());
 
         // create db_impl
         let mut db_impl = RWDBImpl::<FakeStoreServiceConnector>::new_from_connector(
@@ -422,12 +489,12 @@ mod tests {
             FakeStoreServiceConnector::default(),
         );
         db_impl.open(fake_props)?;
-        let create_res = db_impl.create_or_get_updated_tail(PLACEHOLDER_DATASEG_ID)?;
-        // assert creation failure because the new tail has been created in db_impl.open()
-        assert!(!create_res);
+        let _create_res = db_impl.create_or_get_updated_tail(PLACEHOLDER_DATASEG_ID)?;
+        // TODO: assert creation failure because the new tail has been created in db_impl.open()
+        // assert!(!create_res);
         // check whether the tail segment exists
-        let tail_path = SegmentInfo::generate_dir(&home_url, DATA_SEG_ID_MIN, 0);
-        println!("lalal {}", tail_path.path());
+        let client_id = db_impl.get_client_id();
+        let tail_path = SegmentInfo::generate_dir(&home_url, DATA_SEG_ID_MIN | (client_id as u64));
         assert!(FileUtil::exist(&tail_path));
         db_impl.close()?;
         Ok(())
@@ -443,9 +510,15 @@ mod tests {
         let mut first_conn = FakeStoreServiceConnector::default();
         let fake_props: &HashMap<String, String> = &HashMap::new();
         first_conn.open(fake_props)?;
-        let meta_url = SegmentInfo::generate_dir(&home_url, META_SEG_ID, 0);
+        let meta_url = SegmentInfo::generate_dir(&home_url, META_SEG_ID);
         first_conn.create(&meta_url)?;
         println!("meta directory: {}", meta_url.path());
+        // create client tracker segment
+        let client_tracker_dir = home_url
+            .join("rw_client_tracker")
+            .unwrap_or_else(|_| panic!("Cannot generate a path for rw_client_tracker"));
+        first_conn.create(&client_tracker_dir)?;
+        println!("client_tracker directory: {}", client_tracker_dir.path());
 
         let global_tail_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
 

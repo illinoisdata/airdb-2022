@@ -2,15 +2,14 @@ use std::collections::HashMap;
 
 use url::Url;
 
-use crate::{
-    common::error::GResult, consistency::airlock::ClientID, io::storage_connector::StorageConnector,
-};
+use crate::{common::error::GResult, io::storage_connector::StorageConnector, db::rw_db::ClientID};
 
 use super::{
     data_segment::DataSegment,
     meta::Meta,
     meta_segment::MetaSegment,
-    segment::{SegID, Segment, SegmentInfo}, seg_util::SegIDUtil,
+    seg_util::SegIDUtil,
+    segment::{SegID, Segment, SegmentInfo},
 };
 
 pub type DataCache = HashMap<SegID, DataSegment>;
@@ -20,7 +19,6 @@ pub struct SegmentManager {
     data_cache: DataCache,
     meta_cache: MetaSegment,
     home_dir: Url,
-    client_id: ClientID,
 }
 
 impl SegmentManager {
@@ -32,7 +30,6 @@ impl SegmentManager {
                 client_id_new,
             ),
             home_dir: home_dir_new,
-            client_id: client_id_new,
         }
     }
 

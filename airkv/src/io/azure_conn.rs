@@ -45,8 +45,18 @@ pub struct AzureConnector {
 
 impl Default for AzureConnector {
     fn default() -> Self {
+        let account = std::env::var("AZURE_ACCOUNTNAME")
+            .map_err(|_| MissingAzureAuthetication::boxed("Set env variable AZURE_ACCOUNTNAME")).expect("failed to get environment variable AZURE_ACCOUNTNAME");
+
+        let key = std::env::var("AZURE_ACCOUNTKEY")
+            .map_err(|_| MissingAzureAuthetication::boxed("Set env variable AZURE_ACCOUNTKEY")).expect("failed to get environment variable AZURE_ACCOUNTKEY");
+
+        let http_client = azure_core::new_http_client();
         Self {
-            client: None,
+            client: Some(
+                StorageAccountClient::new_access_key(http_client, &account, &key)
+                    .as_storage_client(),
+            ),
             run_time: Runtime::new().expect("Failed to initialize runtime"),
         }
     }
@@ -54,16 +64,6 @@ impl Default for AzureConnector {
 
 impl StorageConnector for AzureConnector {
     fn open(&mut self, _props: &HashMap<String, String>) -> GResult<()> {
-        let account = std::env::var("AZURE_ACCOUNTNAME")
-            .map_err(|_| MissingAzureAuthetication::boxed("Set env variable AZURE_ACCOUNTNAME"))?;
-
-        let key = std::env::var("AZURE_ACCOUNTKEY")
-            .map_err(|_| MissingAzureAuthetication::boxed("Set env variable AZURE_ACCOUNTKEY"))?;
-
-        let http_client = azure_core::new_http_client();
-        self.client = Some(
-            StorageAccountClient::new_access_key(http_client, &account, &key).as_storage_client(),
-        );
         Ok(())
     }
 
@@ -463,7 +463,6 @@ mod tests {
 
     use std::collections::HashMap;
 
-    use itertools::Itertools;
     use serial_test::serial;
     use url::Url;
 

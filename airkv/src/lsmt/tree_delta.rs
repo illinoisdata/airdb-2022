@@ -119,33 +119,55 @@ impl TreeDelta {
     }
 
     // TODO: avoid using this method, use update_tail_delta_for_newinstead
-    pub fn update_tail_delta_from_segid(new_tail: SegID) -> Self {
-        let old_tail_op = SegIDUtil::gen_prev_tail(new_tail);
-        match old_tail_op {
-            Some(old_tail) => TreeDelta::update_tail_delta(
+    pub fn update_tail_delta_from_segid(new_tail: SegID, old_tail: SegID) -> Self {
+        if SegIDUtil::has_prev_tail(new_tail) {
+            TreeDelta::update_tail_delta(
                 SegDesc::new_from_id(old_tail),
                 SegDesc::new_from_id(new_tail),
-            ),
-            None => {
-                // no old tail
-                TreeDelta::new_tail_delta_from_id(new_tail)
-            }
+            )
+        } else {
+            // no old tail
+            TreeDelta::new_tail_delta_from_id(new_tail)
         }
     }
 
-    pub fn update_tail_delta_for_new(new_tail: SegDesc) -> Self {
-        let old_tail_op = SegIDUtil::gen_prev_tail(new_tail.get_id());
-        match old_tail_op {
-            Some(old_tail) => TreeDelta::update_tail_delta(
-                SegDesc::new_from_id(old_tail),
-                new_tail,
-            ),
-            None => {
-                // no old tail
-                TreeDelta::new_tail_delta(new_tail)
-            }
+    pub fn update_tail_delta_for_new(new_tail: SegDesc, old_tail: SegID) -> Self {
+        if SegIDUtil::has_prev_tail(new_tail.get_id()) {
+            TreeDelta::update_tail_delta(SegDesc::new_from_id(old_tail), new_tail)
+        } else {
+            // no old tail
+            TreeDelta::new_tail_delta(new_tail)
         }
     }
+
+    // // TODO: avoid using this method, use update_tail_delta_for_newinstead
+    // pub fn update_tail_delta_from_segid(new_tail: SegID) -> Self {
+    //     let old_tail_op = SegIDUtil::gen_prev_tail(new_tail);
+    //     match old_tail_op {
+    //         Some(old_tail) => TreeDelta::update_tail_delta(
+    //             SegDesc::new_from_id(old_tail),
+    //             SegDesc::new_from_id(new_tail),
+    //         ),
+    //         None => {
+    //             // no old tail
+    //             TreeDelta::new_tail_delta_from_id(new_tail)
+    //         }
+    //     }
+    // }
+
+    // pub fn update_tail_delta_for_new(new_tail: SegDesc) -> Self {
+    //     let old_tail_op = SegIDUtil::gen_prev_tail(new_tail.get_id());
+    //     match old_tail_op {
+    //         Some(old_tail) => TreeDelta::update_tail_delta(
+    //             SegDesc::new_from_id(old_tail),
+    //             new_tail,
+    //         ),
+    //         None => {
+    //             // no old tail
+    //             TreeDelta::new_tail_delta(new_tail)
+    //         }
+    //     }
+    // }
 
     pub fn get_levels_delta(&self) -> &[LevelDelta] {
         &self.levels_delta

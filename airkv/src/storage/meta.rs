@@ -1,6 +1,6 @@
 use crate::{
     common::error::GResult,
-    consistency::airlock::{AirLockCheck, AirLockID, AirLockRequest, AirLockStatus, CommitInfo},
+    consistency::{airlock::{AirLockCheck, AirLockID, AirLockRequest, AirLockStatus, CommitInfo}, optimistic_airlock::{OptimisticCommitInfo, OptimisticAirLockID}},
     io::storage_connector::StorageConnector,
     lsmt::level_seg_desc::LsmTreeDesc,
 };
@@ -25,11 +25,18 @@ pub trait Meta {
     ) -> GResult<AirLockStatus<AirLockID>>;
 
     fn check_commit(&mut self, conn: &dyn StorageConnector, lock_id: &AirLockID) -> bool;
+    fn check_optimistic_commit(&mut self, conn: &dyn StorageConnector, lock_id: &OptimisticAirLockID) -> bool;
 
     fn append_commit_info(
         &self,
         conn: &dyn StorageConnector,
         commit_info: CommitInfo,
+    ) -> GResult<()>;
+
+    fn append_optimistic_commit_info(
+        &self,
+        conn: &dyn StorageConnector,
+        commit_info: OptimisticCommitInfo,
     ) -> GResult<()>;
 
     fn append_lock_request(
