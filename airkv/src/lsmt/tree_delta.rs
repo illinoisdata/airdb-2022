@@ -1,5 +1,6 @@
 use crate::{
     common::{bytebuffer::ByteBuffer, error::GResult, readbuffer::ReadBuffer, serde::Serde},
+    compaction::compaction_task::TaskDesc,
     storage::{seg_util::SegIDUtil, segment::SegID},
 };
 
@@ -91,6 +92,27 @@ impl TreeDelta {
     pub fn new(levels_delta_new: Vec<LevelDelta>) -> Self {
         Self {
             levels_delta: levels_delta_new,
+        }
+    }
+
+    pub fn new_from_compation(task_desc: &TaskDesc) -> Self {
+        //TODO: add min max info to delta
+        let from_level = LevelDelta::new(
+            task_desc.get_compact_level(),
+            false,
+            task_desc
+                .get_src_segs()
+                .iter()
+                .map(|segid| SegDesc::new_from_id(*segid))
+                .collect(),
+        );
+        let to_level = LevelDelta::new(
+            task_desc.get_compact_level() + 1,
+            true,
+            vec![SegDesc::new_from_id(task_desc.get_dest_seg())],
+        );
+        Self {
+            levels_delta: vec![from_level, to_level],
         }
     }
 

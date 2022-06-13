@@ -33,6 +33,7 @@ serde = { version = "1.0", features = ["derive"] }
 serial_test = "0.6.0"
 anyhow = { version = "1.0.57", features = ["backtrace"] }
 jni = "0.19.0"
+async-trait = "0.1.56"
 
 [build-dependencies]
 tonic-build = "0.6"

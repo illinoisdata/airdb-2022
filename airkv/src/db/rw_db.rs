@@ -186,7 +186,7 @@ impl<T: StorageConnector> RWDBImpl<T> {
     pub fn new_from_connector(home_dir_new: Url, connector_new: T) -> RWDBImpl<T> {
         // get client id
         let client_id_new = DBFactory::gen_client_id(&home_dir_new, &connector_new, true);
-        println!("INFO: create a new client with id {}", client_id_new);
+        println!("INFO: create a new rw client with id {}", client_id_new);
         Self {
             store_connector: connector_new,
             seg_manager: SegmentManager::new(client_id_new, home_dir_new),
@@ -215,7 +215,6 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
         Ok(())
     }
 
-    // fn put(&'b mut self, key: Key, value: Value) -> GResult<()> {
     fn put(&mut self, key: Key, value: Value) -> GResult<()> {
         let entries = vec![Entry::new(key, value)];
         self.put_entries(entries)?;

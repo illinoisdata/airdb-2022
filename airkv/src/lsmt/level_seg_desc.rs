@@ -1,12 +1,15 @@
-use std::{cmp::Ordering};
+use std::{cmp::Ordering, collections::HashSet};
 
 use crate::{
     common::{bytebuffer::ByteBuffer, error::GResult, readbuffer::ReadBuffer, serde::Serde},
-    storage::{segment::SegID, seg_util::{PLACEHOLDER_DATASEG_ID, SegIDUtil}},
+    consistency::airlock::ResourceID,
+    storage::{
+        seg_util::{SegIDUtil, PLACEHOLDER_DATASEG_ID},
+        segment::SegID,
+    },
 };
 
 use super::tree_delta::{LevelDelta, TreeDelta};
-
 
 // SegDesc describes a data segment, it won't be used to describe the meta segment
 #[derive(Clone, Debug)]
@@ -118,7 +121,7 @@ impl Serde<SegDesc> for SegDesc {
         let seg_id_read = if is_optimistic {
             buff.read_u64()
         } else {
-            SegIDUtil::from_non_optimistic_segid( buff.read_u32())
+            SegIDUtil::from_non_optimistic_segid(buff.read_u32())
         };
         let has_stat = buff.read_bool();
         if has_stat {
@@ -159,7 +162,7 @@ impl LevelSegDesc {
     }
 
     pub fn get_segs(&self) -> Vec<SegDesc> {
-        //TODO: find a optimized structure for segs_desc 
+        //TODO: find a optimized structure for segs_desc
         let mut segs = self.segs_desc.clone();
         segs.sort_by(|a, b| b.cmp(a));
         segs
@@ -184,7 +187,12 @@ impl LevelSegDesc {
 
     fn remove_segs(&mut self, segs: &[SegDesc]) {
         // TODO(L0): optimize to speed up deletion and throw exception if target segs are not found in segs_desc
-        self.segs_desc.retain(|x| !segs.contains(x));
+        let remove_res: HashSet<ResourceID> = HashSet::from_iter(
+            segs.iter()
+                .map(|seg_desc| SegIDUtil::get_resid_from_segid(seg_desc.get_id())),
+        );
+        self.segs_desc
+            .retain(|x| !remove_res.contains(&SegIDUtil::get_resid_from_segid(x.get_id())));
         self.seg_num = self.segs_desc.len() as u32;
     }
 }
@@ -220,7 +228,7 @@ impl LsmTreeDesc {
     }
 
     pub fn has_tail(&self) -> bool {
-         self.tail_desc.get_id() != PLACEHOLDER_DATASEG_ID
+        self.tail_desc.get_id() != PLACEHOLDER_DATASEG_ID
     }
 
     pub fn get_level_num(&self) -> u8 {
