@@ -63,6 +63,7 @@ impl Default for AzureConnector {
 }
 
 impl StorageConnector for AzureConnector {
+
     fn open(&mut self, _props: &HashMap<String, String>) -> GResult<()> {
         Ok(())
     }
@@ -72,6 +73,7 @@ impl StorageConnector for AzureConnector {
         Ok(())
     }
 
+    
     fn read_all(&self, path: &Url) -> GResult<Vec<u8>> {
         self.run_time.block_on(self.read_all_async(path))
     }

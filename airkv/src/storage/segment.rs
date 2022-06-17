@@ -20,7 +20,7 @@ pub type SegSize = BlockNum;
 /**
  * 1. the first two bits denote segment type
  * 2. the third to tenth bits denote level number
- * 3. the eleventh to the 32nd bits denote the pure segment id 
+ * 3. the eleventh to the 32nd bits denote the pure segment id
  * 4. the last 32 bits denote client id (only necessary for optimistic lock strategy)
  */
 pub type SegID = u64;
@@ -33,10 +33,7 @@ pub enum SegmentType {
 
 impl SegmentType {
     pub fn append_access_pattern(&self) -> bool {
-        matches!(
-            self,
-            Self::MetaSegment | Self::DataSegmentL0
-        )
+        matches!(self, Self::MetaSegment | Self::DataSegmentL0)
     }
 
     pub fn is_meta(&self) -> bool {
@@ -157,7 +154,66 @@ impl Entry {
     pub fn get_value(&self) -> &Vec<u8> {
         &self.value
     }
+}
 
+impl Ord for Entry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.get_key().cmp(other.get_key())
+    }
+}
+
+impl PartialOrd for Entry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Default, Clone, PartialEq, Eq, Debug)]
+pub struct IdxEntry {
+    idx: u32,
+    entry: Entry,
+}
+
+impl IdxEntry {
+
+    pub fn new(idx_new: u32, entry_new: Entry) -> Self {
+        Self {
+            idx: idx_new,  
+            entry: entry_new,
+        }
+    }
+
+    pub fn get_key(&self) -> &Vec<u8> {
+        self.entry.get_key()
+    }
+
+    pub fn get_entry(&self) -> &Entry {
+        &self.entry
+    }
+
+    pub fn get_idx(&self) -> u32 {
+        self.idx
+    }
+    
+    pub fn update_idx(&mut self, new_idx: u32) {
+        self.idx = new_idx;
+    }
+}
+
+impl Ord for IdxEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        //entry with smallest entry value and largest idx will rank top
+        match self.get_entry().cmp(other.get_entry()) {
+            std::cmp::Ordering::Equal => other.get_idx().cmp(&self.get_idx()),
+            other_cmp => other_cmp,
+        }
+    }
+}
+
+impl PartialOrd for IdxEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 #[derive(Debug)]

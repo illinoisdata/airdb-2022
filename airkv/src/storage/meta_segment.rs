@@ -53,10 +53,10 @@ impl Meta for MetaSegment {
         Ok(self.get_tail_from_cache())
     }
 
-    fn get_refreshed_tree_desc(&mut self, conn: &dyn StorageConnector) -> GResult<LsmTreeDesc> {
+    fn get_refreshed_tree_desc(&mut self, conn: &dyn StorageConnector) -> LsmTreeDesc {
         // refresh meta
-        self.refresh_meta(conn)?;
-        Ok(self.get_tree_desc_from_cache())
+        self.refresh_meta(conn).expect("failed to refresh meta");
+        self.get_tree_desc_from_cache()
     }
 
     fn get_tail_from_cache(&self) -> SegID {

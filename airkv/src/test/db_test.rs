@@ -375,7 +375,6 @@ mod tests {
                             Ok(value) => value,
                             Err(err) => {
                                 panic!("get err: {:?}", err);
-                                None
                             }
                         };
 

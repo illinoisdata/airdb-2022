@@ -85,6 +85,42 @@ impl SegIDUtil {
         }
     }
 
+    /**
+     * generage compacted segment id from the first segment which need to be compacted.
+     *
+     * src_seg_id: the segid of the first seg in segments which need to be compacted.
+     */
+    pub fn gen_compaction_segid(src_seg_id: SegID, client_id: Option<ClientID>) -> SegID {
+        SegIDUtil::gen_segid(
+            SegmentType::DataSegmentLn,
+            SegIDUtil::get_level(src_seg_id) + 1,
+            SegIDUtil::get_pure_id(src_seg_id),
+            client_id,
+        )
+    }
+
+    pub fn gen_segid(
+        seg_type: SegmentType,
+        level_num: u8,
+        pure_seg_id: u32,
+        client_id: Option<ClientID>,
+    ) -> SegID {
+        /**
+         * For each 64-bit SegID(the first three parts make up the header)
+         * 1. the first two bits denote segment type
+         * 2. the third to tenth bits denote level number
+         * 3. the eleventh to the 32nd bits denote the pure segment id
+         * 4. the last 32 bits denote client id (only necessary for optimistic lock strategy)
+         */
+        let segtype = seg_type as SegID;
+        let level = level_num as SegID;
+        let pure_id = pure_seg_id as SegID;
+        match client_id {
+            Some(cid) => segtype << 62 | level << 54 | pure_id << 32 | (cid as SegID),
+            None => segtype << 62 | level << 54 | pure_id << 32,
+        }
+    }
+
     pub fn get_level(seg_id: SegID) -> u8 {
         // the third to tenth bits denote the level number
         ((seg_id << 2) >> 56) as u8

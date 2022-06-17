@@ -4,6 +4,7 @@ extern crate lazy_static;
 pub mod cache;
 pub mod common;
 pub mod consistency;
+pub mod compaction;
 pub mod db;
 pub mod io;
 pub mod lsmt;
