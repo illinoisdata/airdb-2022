@@ -189,16 +189,6 @@ impl DataCache {
         }
     }
 
-    // pub fn update(&mut self, is_full: bool, new_range: DataRange) -> GResult<()> {
-    //     if self.cached_data.is_empty() {
-    //         self.cached_data = new_range;
-    //     } else {
-    //         self.cached_data.append(&mut new_range)?;
-    //     }
-    //     self.is_full = is_full;
-    //     Ok(())
-    // }
-
     pub fn update_from_slice(
         &mut self,
         is_full: bool,

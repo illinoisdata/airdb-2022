@@ -1,22 +1,32 @@
-use std::slice::Iter;
+use std::{collections::HashMap, slice::Iter, time::Instant};
 
 use super::{
     data_entry::{AppendRes, EntryAccess},
     segment::{Entry, ReadEntryIterator, SegSize, SegmentInfo},
 };
 use crate::{
-    cache::data_cache::{CacheHitStatus, DataCache},
+    cache::{
+        data_cache::{CacheHitStatus, DataCache},
+        entry_cache::EntryCache,
+    },
     common::{
         bytebuffer::ByteBuffer, dataslice::DataSlice, error::GResult,
         read_bytebuffer::ReadByteBuffer, reverse_bytebuffer::ReversedByteBuffer,
     },
+    db::rw_db::Key,
     io::{file_utils::Range, storage_connector::StorageConnector},
     storage::segment::Segment,
 };
 
+pub static mut APPEND_TIME: u128 = 0;
+pub static mut TAIL_CREATE_TIME: u128 = 0;
+pub static mut TAIL_LOCK_COMMIT_TIME: u128 = 0;
+pub static mut TAIL_LOCK_CHECK_TIME: u128 = 0;
+
 pub struct DataSegment {
     seg_info: SegmentInfo,
     data_cache: DataCache,
+    entry_cache: EntryCache,
 }
 
 impl DataSegment {
@@ -24,6 +34,7 @@ impl DataSegment {
         Self {
             seg_info: seg_info_new,
             data_cache: DataCache::default(),
+            entry_cache: EntryCache::new(),
         }
     }
 }
@@ -109,11 +120,15 @@ impl Segment for DataSegment {
                 let seg_range = &Range::transfer_from(&miss_range);
                 let data = conn.read_range(self.get_path(), seg_range)?;
                 self.data_cache
-                .update_from_slice(false, miss_range, &data)?;
+                    .update_from_slice(false, miss_range, &data)?;
                 // read cache again, expect a cache hit
                 match self.data_cache.get(cache_range)? {
                     CacheHitStatus::Hit { data } => Ok(data),
-                    _ => panic!("unexpected cache status for range {:?}, cahced_range {:?}", cache_range, self.data_cache.get_range()),
+                    _ => panic!(
+                        "unexpected cache status for range {:?}, cahced_range {:?}",
+                        cache_range,
+                        self.data_cache.get_range()
+                    ),
                 }
             }
         }
@@ -146,7 +161,12 @@ impl EntryAccess for DataSegment {
             buffer.write_bytes(key);
             buffer.write_u16(key.len() as u16);
         }
-        self.append_all(conn, buffer.to_view())
+        // let start = Instant::now();
+        let res = self.append_all(conn, buffer.to_view());
+        // unsafe {
+        //     APPEND_TIME += start.elapsed().as_millis();
+        // }
+        res
     }
 
     // write entries from the beginning of the segment
@@ -196,12 +216,75 @@ impl EntryAccess for DataSegment {
         }
     }
 
-    fn search_entry(&mut self, conn: &dyn StorageConnector, key: &[u8]) -> GResult<Option<Entry>> {
-        //TODO: use index to search
-        let mut entries = self.read_all_entries(conn)?;
-        Ok(entries.find(|entry| entry.get_key_slice() == key))
+    fn search_entry(
+        &mut self,
+        conn: &dyn StorageConnector,
+        key: &[u8],
+        is_seg_mutable: bool,
+    ) -> GResult<Option<Entry>> {
+        //use hashmap cache to search
+        if self.entry_cache.is_full() {
+            Ok(self.entry_cache.get(key))
+        } else if self.entry_cache.is_empty() {
+            let data = conn.read_all(self.get_path())?;
+            let data_len = data.len();
+            if self.seg_info.append_seg() {
+                //TODO: remove DataSlice wrap
+                let data_buffer = ReversedByteBuffer::wrap(DataSlice::wrap_vec(data));
+                let iter = ReadEntryIterator::new(Box::new(data_buffer));
+                iter.for_each(|entry| {
+                    if !self.entry_cache.contains(entry.get_key()) {
+                        self.entry_cache.insert(entry.get_key().clone(), entry);
+                    }
+                });
+                // update is_full, range properties
+                if !is_seg_mutable {
+                    self.entry_cache.set_full();
+                }
+                //TODO: take care of the upper bound (inclusive or not)
+                self.entry_cache.set_upper_bound(data_len as u64);
+            } else {
+                //TODO: remove DataSlice wrap
+                let data_buffer = ReadByteBuffer::wrap(DataSlice::wrap_vec(data));
+                let iter = ReadEntryIterator::new(Box::new(data_buffer));
+                iter.for_each(|entry| {
+                    self.entry_cache.insert(entry.get_key().clone(), entry);
+                });
+                // update is_full, range properties
+                if !is_seg_mutable {
+                    self.entry_cache.set_full();
+                }
+                //TODO: take care of the upper bound (inclusive or not)
+                self.entry_cache.set_upper_bound(data_len as u64);
+            }
+            Ok(self.entry_cache.get(key))
+        } else {
+            let old_bound = self.entry_cache.get_upper_bound();
+            let data = conn.read_range(self.get_path(), &Range::new(old_bound, 0))?;
+            let data_len = data.len();
+            assert!(self.seg_info.append_seg());
+            //TODO: remove DataSlice wrap
+            let data_buffer = ReversedByteBuffer::wrap(DataSlice::wrap_vec(data));
+            let iter = ReadEntryIterator::new(Box::new(data_buffer));
+            let mut tmp_map: HashMap<Key, Entry> = HashMap::new();
+            iter.for_each(|entry| {
+                if !tmp_map.contains_key(entry.get_key()) {
+                    tmp_map.insert(entry.get_key().clone(), entry);
+                }
+            });
+            self.entry_cache.extend(tmp_map);
+            // update is_full, range properties
+            if !is_seg_mutable {
+                self.entry_cache.set_full();
+            }
+            //TODO: take care of the upper bound (inclusive or not)
+            self.entry_cache
+                .set_upper_bound(self.entry_cache.get_upper_bound() + data_len as u64);
+            Ok(self.entry_cache.get(key))
+        }
     }
 
+    //call this method only when the end of the sealed seg won't be reached
     fn search_entry_in_range(
         &mut self,
         conn: &dyn StorageConnector,
@@ -209,8 +292,43 @@ impl EntryAccess for DataSegment {
         range: &Range,
     ) -> GResult<Option<Entry>> {
         //TODO: use index to search
-        let mut entries = self.read_range_entries(conn, range)?;
-        Ok(entries.find(|entry| entry.get_key_slice() == key))
+        assert!(range.get_offset() == 0);
+        if range.get_length() + range.get_offset() <= self.entry_cache.get_upper_bound() {
+            Ok(self.entry_cache.get(key))
+        } else {
+            let old_bound = self.entry_cache.get_upper_bound();
+            let data = conn.read_range(
+                self.get_path(),
+                &Range::new(
+                    old_bound,
+                    range.get_length() + range.get_offset() - old_bound,
+                ),
+            )?;
+            let data_len = data.len();
+            assert!(self.seg_info.append_seg());
+            //TODO: remove DataSlice wrap
+            let data_buffer = ReversedByteBuffer::wrap(DataSlice::wrap_vec(data));
+            let iter = ReadEntryIterator::new(Box::new(data_buffer));
+            let mut tmp_map: HashMap<Key, Entry> = HashMap::new();
+            iter.for_each(|entry| {
+                if !tmp_map.contains_key(entry.get_key()) {
+                    tmp_map.insert(entry.get_key().clone(), entry);
+                }
+            });
+            self.entry_cache.extend(tmp_map);
+            //TODO: take care of the upper bound (inclusive or not)
+            self.entry_cache
+                .set_upper_bound(self.entry_cache.get_upper_bound() + data_len as u64);
+            Ok(self.entry_cache.get(key))
+        }
+
+        // let mut entries = self.read_range_entries(conn, range)?;
+        // let start = Instant::now();
+        // let res = entries.find(|entry| entry.get_key_slice() == key);
+        // unsafe {
+        //     IN_MEM_SEARCH_TIME += start.elapsed().as_millis();
+        // }
+        // Ok(res)
     }
 }
 
@@ -226,10 +344,8 @@ mod tests {
         cache::data_cache::{CacheHitStatus, DataCache},
         common::error::GResult,
         io::{
-            azure_conn::AzureConnector,
-            fake_store_service_conn::FakeStoreServiceConnector,
-            file_utils::{UrlUtil},
-            storage_connector::StorageConnector,
+            azure_conn::AzureConnector, fake_store_service_conn::FakeStoreServiceConnector,
+            file_utils::UrlUtil, storage_connector::StorageConnector,
         },
         storage::{
             data_entry::{AppendRes, EntryAccess},
@@ -342,7 +458,7 @@ mod tests {
             // get target kv
             let target_entry = &data_entries[rand::thread_rng().gen_range(0..100)];
             // search kv
-            let search_entry_res = seg.search_entry(&first_conn, target_entry.get_key_slice());
+            let search_entry_res = seg.search_entry(&first_conn, target_entry.get_key_slice(), false);
             assert!(search_entry_res.is_ok());
             let search_entry_op = search_entry_res.unwrap();
             assert!(search_entry_op.is_some());
@@ -420,7 +536,7 @@ mod tests {
             // get target kv
             let target_entry = &data_entries[rand::thread_rng().gen_range(0..100)];
             // search kv
-            let search_entry_res = seg.search_entry(&first_conn, target_entry.get_key_slice());
+            let search_entry_res = seg.search_entry(&first_conn, target_entry.get_key_slice(), false);
             assert!(search_entry_res.is_ok());
             let search_entry_op = search_entry_res.unwrap();
             assert!(search_entry_op.is_some());

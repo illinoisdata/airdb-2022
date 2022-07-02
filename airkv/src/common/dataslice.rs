@@ -29,6 +29,16 @@ impl DataSlice {
         }
     }
 
+    pub fn wrap_vec(data: Vec<u8>) -> Self {
+        let data_new = Rc::new(RefCell::new(data));
+        let len = data_new.borrow().len();
+        Self {
+            data: data_new,
+            range: 0..len,
+        }
+    }
+
+
     pub fn get(&self, idx: usize) -> u8 {
         self.data.borrow()[idx + self.range.start]
     }

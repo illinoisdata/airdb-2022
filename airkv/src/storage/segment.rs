@@ -10,7 +10,7 @@ use super::data_entry::AppendRes;
 use super::seg_util::SegIDUtil;
 
 // pub static SEG_BLOCK_NUM_LIMIT: u16 = 5000;
-// pub static mut SEG_BLOCK_NUM_LIMIT: u16 = 50000;
+pub static mut SEG_BLOCK_NUM_LIMIT: u16 = 50000;
 
 pub type SegLen = u64;
 
@@ -175,10 +175,9 @@ pub struct IdxEntry {
 }
 
 impl IdxEntry {
-
     pub fn new(idx_new: u32, entry_new: Entry) -> Self {
         Self {
-            idx: idx_new,  
+            idx: idx_new,
             entry: entry_new,
         }
     }
@@ -194,7 +193,7 @@ impl IdxEntry {
     pub fn get_idx(&self) -> u32 {
         self.idx
     }
-    
+
     pub fn update_idx(&mut self, new_idx: u32) {
         self.idx = new_idx;
     }
@@ -204,7 +203,7 @@ impl Ord for IdxEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         //entry with smallest entry value and largest idx will rank top
         match self.get_entry().cmp(other.get_entry()) {
-            std::cmp::Ordering::Equal => other.get_idx().cmp(&self.get_idx()),
+            std::cmp::Ordering::Equal => self.get_idx().cmp(&other.get_idx()),
             other_cmp => other_cmp,
         }
     }
@@ -215,6 +214,7 @@ impl PartialOrd for IdxEntry {
         Some(self.cmp(other))
     }
 }
+
 
 #[derive(Debug)]
 pub struct SegmentProps {

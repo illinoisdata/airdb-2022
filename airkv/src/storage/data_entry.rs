@@ -91,7 +91,7 @@ pub trait EntryAccess {
         range: &Range,
     ) -> GResult<Box<dyn Iterator<Item = Entry>>>;
 
-    fn search_entry(&mut self, conn: &dyn StorageConnector, key: &[u8]) -> GResult<Option<Entry>>;
+    fn search_entry(&mut self, conn: &dyn StorageConnector, key: &[u8], is_seg_mutable: bool) -> GResult<Option<Entry>>;
 
     fn search_entry_in_range(
         &mut self,
@@ -107,4 +107,5 @@ pub trait EntryAccess {
         conn: &dyn StorageConnector,
         entries: Iter<Entry>,
     ) -> AppendRes<SegSize>;
+    
 }

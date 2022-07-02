@@ -73,8 +73,20 @@ impl SegIDUtil {
 
     // get the pure id for each seg
     pub fn get_pure_id(seg_id: SegID) -> u32 {
-        // the eleventh bit to the end denote the pure id
+        // the eleventh bit to 32th bit denote the pure id
         ((seg_id << 10) >> 42) as u32
+    }
+
+    pub fn get_readable_segid(seg_id: SegID) -> String {
+        let client_id_option = SegIDUtil::get_client_id(seg_id);
+
+        let level = SegIDUtil::get_level(seg_id);
+        let pure_id = SegIDUtil::get_pure_id(seg_id);
+
+        match client_id_option {
+            Some(client_id) => format!("data{}_{}_{}", level, pure_id, client_id),
+            None => format!("data{}_{}", level, pure_id),
+        }
     }
 
     pub fn get_client_id(seg_id: SegID) -> Option<ClientID> {

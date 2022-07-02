@@ -5,7 +5,10 @@ mod tests {
     use std::{
         collections::HashMap,
         panic,
-        sync::{Arc, RwLock},
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Mutex, RwLock,
+        },
         thread::{self, JoinHandle},
         time::{Duration, Instant},
     };
@@ -26,6 +29,9 @@ mod tests {
             storage_connector::{StorageConnector, StorageType},
         },
         storage::{
+            data_segment::{
+                APPEND_TIME, TAIL_CREATE_TIME, TAIL_LOCK_CHECK_TIME, TAIL_LOCK_COMMIT_TIME,
+            },
             seg_util::META_SEG_ID,
             segment::{Entry, SegmentInfo},
         },
@@ -107,7 +113,7 @@ mod tests {
             StorageType::RemoteFakeStore,
             |store_type: StorageType, home_url: Url| {
                 db_single_client_test(store_type, home_url)
-                    .expect("db_single_client_test for azure connector");
+                    .expect("db_single_client_test for fake connector");
             },
         )?;
         Ok(())
@@ -120,7 +126,7 @@ mod tests {
             StorageType::RemoteFakeStore,
             |store_type: StorageType, home_url: Url| {
                 db_multi_client_test(store_type, home_url)
-                    .expect("db_single_client_test for azure connector");
+                    .expect("db_single_client_test for fake connector");
             },
         )?;
         Ok(())
@@ -133,24 +139,24 @@ mod tests {
     //         StorageType::RemoteFakeStore,
     //         |store_type: StorageType, home_url: Url| {
     //             db_read_committed_multi_client_test_1(store_type, home_url)
-    //                 .expect("db_read_committed_multi_client_test_1 for azure connector");
+    //                 .expect("db_read_committed_multi_client_test_1 for fake connector");
     //         },
     //     )?;
     //     Ok(())
     // }
 
-    #[test]
-    #[serial]
-    fn fake_store_read_committed_multi_client_test_2() -> GResult<()> {
-        run_test(
-            StorageType::RemoteFakeStore,
-            |store_type: StorageType, home_url: Url| {
-                db_read_committed_multi_client_test_2(store_type, home_url)
-                    .expect("db_read_committed_multi_client_test_1 for azure connector");
-            },
-        )?;
-        Ok(())
-    }
+    // #[test]
+    // #[serial]
+    // fn fake_store_read_committed_multi_client_test_2() -> GResult<()> {
+    //     run_test(
+    //         StorageType::RemoteFakeStore,
+    //         |store_type: StorageType, home_url: Url| {
+    //             db_read_committed_multi_client_test_2(store_type, home_url)
+    //                 .expect("db_read_committed_multi_client_test_1 for fake connector");
+    //         },
+    //     )?;
+    //     Ok(())
+    // }
 
     #[test]
     #[serial]
@@ -165,6 +171,19 @@ mod tests {
         Ok(())
     }
 
+    // #[test]
+    // #[serial]
+    // fn azure_single_client_compaction_test() -> GResult<()> {
+    //     run_test(
+    //         StorageType::AzureStore,
+    //         |store_type: StorageType, home_url: Url| {
+    //             db_single_compaction_client_test(store_type, home_url)
+    //                 .expect("db_single_compaction_client_test for azure connector");
+    //         },
+    //     )?;
+    //     Ok(())
+    // }
+
     #[test]
     #[serial]
     fn azure_multi_client_test() -> GResult<()> {
@@ -178,17 +197,29 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
-    // #[serial]
-    // fn azure_read_committed_multi_client_test_1() -> GResult<()> {
-    //     read_committed_multi_client_test_1(StorageType::AzureStore)?;
-    //     Ok(())
-    // }
+    #[test]
+    #[serial]
+    fn azure_read_committed_multi_client_test_1() -> GResult<()> {
+        run_test(
+            StorageType::AzureStore,
+            |store_type: StorageType, home_url: Url| {
+                db_read_committed_multi_client_test_1(store_type, home_url)
+                    .expect("db_read_committed_multi_client_test_1 for azure connector");
+            },
+        )?;
+        Ok(())
+    }
 
     // #[test]
     // #[serial]
     // fn azure_read_committed_multi_client_test_2() -> GResult<()> {
-    //     read_committed_multi_client_test_2(StorageType::AzureStore)?;
+    //     run_test(
+    //         StorageType::AzureStore,
+    //         |store_type: StorageType, home_url: Url| {
+    //             db_read_committed_multi_client_test_2(store_type, home_url)
+    //                 .expect("db_read_committed_multi_client_test_1 for azure connector");
+    //         },
+    //     )?;
     //     Ok(())
     // }
 
@@ -403,7 +434,17 @@ mod tests {
 
     fn db_read_committed_multi_client_test_1(store_type: StorageType, home: Url) -> GResult<()> {
         // multiple clients write and read
-        let handles: Vec<JoinHandle<()>> = (0..10)
+        let block_num_limit = match store_type {
+            StorageType::RemoteFakeStore => 500,
+            StorageType::AzureStore => 50,
+            StorageType::LocalFakeStore => todo!(),
+        };
+        let thread_num = match store_type {
+            StorageType::RemoteFakeStore => 10,
+            StorageType::AzureStore => 7,
+            StorageType::LocalFakeStore => todo!(),
+        };
+        let handles: Vec<JoinHandle<()>> = (0..thread_num)
             .map(|_x| {
                 let home_url = home.clone();
                 thread::spawn(move || {
@@ -411,16 +452,18 @@ mod tests {
                     // create db
                     let mut db = DBFactory::new_rwdb(home_url, store_type);
                     let mut fake_props: HashMap<String, String> = HashMap::new();
-                    fake_props.insert("SEG_BLOCK_NUM_LIMIT".to_string(), "500".to_string());
-
+                    fake_props.insert(
+                        "SEG_BLOCK_NUM_LIMIT".to_string(),
+                        block_num_limit.to_string(),
+                    );
                     db.open(&fake_props).expect("db.open() failed");
 
                     let mut rng = rand::thread_rng();
-                    let row_number: usize = db.get_props().get_seg_block_num_limit() as usize + 100;
+                    let row_number: usize = (block_num_limit + (block_num_limit / 5)) as usize;
 
                     let mut put_time: u128 = 0;
                     let mut get_time: u128 = 0;
-                    (0..row_number).for_each(|_i| {
+                    (0..row_number).for_each(|i| {
                         let mut random_part = vec![];
                         random_part.extend(db.get_client_id().to_be_bytes());
                         random_part.extend(gen_random_bytes(&mut rng, 10));
@@ -434,12 +477,20 @@ mod tests {
                         put_time += current.elapsed().as_millis();
 
                         let now = Instant::now();
-                        let search_value = db
-                            .get(&key_cp)
-                            .expect("error found during searching the value");
+                        let search_value = db.get(&key_cp).unwrap_or_else(|_| {
+                            panic!(
+                                "error found during searching the value for row number {}",
+                                i
+                            )
+                        });
+
                         get_time += now.elapsed().as_millis();
 
-                        assert!(search_value.is_some());
+                        assert!(
+                            search_value.is_some(),
+                            "error found during searching the value for row number {}",
+                            i
+                        );
                         assert_eq!(value_cp, search_value.unwrap().get_value_slice());
                     });
 
@@ -469,9 +520,20 @@ mod tests {
     // read-all-committed: the read client should be able to read all committed records
     fn db_read_committed_multi_client_test_2(store_type: StorageType, home: Url) -> GResult<()> {
         let latest_commit: Arc<RwLock<Vec<u8>>> = Arc::new(RwLock::new(vec![]));
+        // multiple clients write and read
+        let block_num_limit = match store_type {
+            StorageType::RemoteFakeStore => 500,
+            StorageType::AzureStore => 50,
+            StorageType::LocalFakeStore => todo!(),
+        };
+        let thread_num = match store_type {
+            StorageType::RemoteFakeStore => 10,
+            StorageType::AzureStore => 10,
+            StorageType::LocalFakeStore => todo!(),
+        };
 
         // multiple clients write and read
-        let handles: Vec<JoinHandle<()>> = (0..10)
+        let handles: Vec<JoinHandle<()>> = (0..thread_num)
             .map(|idx| {
                 let home_url = home.clone();
                 let latest_commit_clone = latest_commit.clone();
@@ -484,14 +546,16 @@ mod tests {
                         // create db
                         let mut db = DBFactory::new_rwdb(home_url, store_type);
                         let mut fake_props: HashMap<String, String> = HashMap::new();
-                        fake_props.insert("SEG_BLOCK_NUM_LIMIT".to_string(), "500".to_string());
-
+                        fake_props.insert(
+                            "SEG_BLOCK_NUM_LIMIT".to_string(),
+                            block_num_limit.to_string(),
+                        );
                         db.open(&fake_props).expect("db.open() failed");
 
                         let mut rng = rand::thread_rng();
 
-                        let row_number: usize =
-                            db.get_props().get_seg_block_num_limit() as usize + 100;
+                        let row_number: usize = (block_num_limit + (block_num_limit / 5)) as usize;
+
                         let mut put_time: u128 = 0;
 
                         (0..row_number).for_each(|_i| {
@@ -521,11 +585,14 @@ mod tests {
                         // create db
                         let mut db = DBFactory::new_rwdb(home_url, StorageType::RemoteFakeStore);
                         let mut fake_props: HashMap<String, String> = HashMap::new();
-                        fake_props.insert("SEG_BLOCK_NUM_LIMIT".to_string(), "500".to_string());
+                        fake_props.insert(
+                            "SEG_BLOCK_NUM_LIMIT".to_string(),
+                            block_num_limit.to_string(),
+                        );
 
                         db.open(&fake_props).expect("db.open() failed");
 
-                        let sample_size = 450;
+                        let sample_size = block_num_limit;
                         let mut get_time: u128 = 0;
 
                         (0..sample_size).for_each(|_x| {
@@ -559,6 +626,145 @@ mod tests {
         handles
             .into_iter()
             .for_each(|handle| handle.join().expect("join failure"));
+        Ok(())
+    }
+
+    fn db_single_compaction_client_test(db_type: StorageType, home_url: Url) -> GResult<()> {
+        // launch a compactioin client in advance
+        let home_url_compact = home_url.clone();
+        // let mut need_stop = false;
+        let need_stop = Arc::new(AtomicBool::new(false));
+
+        let need_stop_clone = need_stop.clone();
+
+        let t = thread::spawn(move || {
+            println!("create compaction_db");
+            let mut c_db = DBFactory::new_compactiondb(home_url_compact, StorageType::AzureStore);
+
+            c_db.open(&HashMap::new())
+                .expect("failed to call compactionDB.open()");
+            while !need_stop_clone.load(Ordering::Relaxed) {
+                let task = c_db.get_task();
+                if let Some(task_desc) = task {
+                    let res = c_db.execute(&task_desc).unwrap();
+                    if res {
+                        println!("INFO: run compaction successfully for task: {}", task_desc);
+                    } else {
+                        println!(
+                            "WARN: finished executing compaction but failed to commit for task: {}",
+                            task_desc
+                        );
+                    }
+                } else {
+                    println!("INFO: wait 20s to check compaction opportunity");
+                    thread::sleep(Duration::from_secs(20));
+                }
+            }
+        });
+
+        // create db
+        let mut db = DBFactory::new_rwdb(home_url, db_type);
+        let mut fake_props: HashMap<String, String> = HashMap::new();
+        // let seg_block_num_limit: u32 = match db_type {
+        //     StorageType::LocalFakeStore | StorageType::RemoteFakeStore => 500,
+        //     StorageType::AzureStore => 5,
+        // };
+        let seg_block_num_limit: u32 = match db_type {
+            StorageType::LocalFakeStore | StorageType::RemoteFakeStore => 500,
+            StorageType::AzureStore => 2000,
+        };
+        // let row_number: usize =
+        //     seg_block_num_limit as usize * 40 + (seg_block_num_limit - 3) as usize;
+        let row_number: usize =
+            seg_block_num_limit as usize * 4 + (seg_block_num_limit - 3) as usize;
+
+        fake_props.insert(
+            "SEG_BLOCK_NUM_LIMIT".to_string(),
+            seg_block_num_limit.to_string(),
+        );
+        db.open(&fake_props)?;
+
+        println!("open rw_db");
+        let mut rng = rand::thread_rng();
+        const SAMPLE_SIZE: usize = 2000;
+        let mut sample_entries = ArrayVec::<Entry, SAMPLE_SIZE>::new();
+
+        let mut query_time: u128 = 0;
+        (0..row_number).for_each(|i| {
+            let mut random_part = gen_random_bytes(&mut rng, 10);
+            random_part.extend(i.to_be_bytes());
+            let key = random_part;
+            let value = gen_random_bytes(&mut rng, 1024);
+
+            // get samples using reservoir sampling
+            if i < SAMPLE_SIZE {
+                let entry = Entry::new(key.clone(), value.clone());
+                sample_entries.insert(i, entry);
+            } else {
+                let random_v = rng.gen_range(0..i);
+                if random_v < SAMPLE_SIZE {
+                    let entry = Entry::new(key.clone(), value.clone());
+                    sample_entries[random_v] = entry;
+                }
+            }
+            let current = Instant::now();
+            db.put(key, value)
+                .unwrap_or_else(|_| panic!("put entry failure for row {}", i));
+            query_time += current.elapsed().as_millis();
+        });
+
+        println!("total query latency for put is {} ms", query_time);
+        println!(
+            "avg query latency for put is {} ms",
+            query_time as f64 / row_number as f64
+        );
+
+        // unsafe {
+        //     println!("total append file latency for put is {} ms", APPEND_TIME);
+        //     println!(
+        //         "avg query latency to append tail is {} ms",
+        //         APPEND_TIME as f64 / row_number as f64
+        //     );
+
+        //     println!("total create tail latency for put is {} ms", TAIL_CREATE_TIME);
+        //     println!(
+        //         "avg query latency to create tail latency is {} ms",
+        //         TAIL_CREATE_TIME as f64 / row_number as f64
+        //     );
+
+        //     println!("total tail lock commit latency for put is {} ms", TAIL_LOCK_COMMIT_TIME);
+        //     println!(
+        //         "avg query latency for tail lock commit is {} ms",
+        //         TAIL_LOCK_COMMIT_TIME as f64 / row_number as f64
+        //     );
+
+        //     println!("total tail lock check latency for put is {} ms", TAIL_LOCK_CHECK_TIME);
+        //     println!(
+        //         "avg query latency for tail lock check is {} ms",
+        //         TAIL_LOCK_CHECK_TIME as f64 / row_number as f64
+        //     );
+        // }
+
+        query_time = 0;
+        // check the correctness of data by comparing with the sample
+        sample_entries.iter().for_each(|entry| {
+            let key = entry.get_key();
+            let target_value = entry.get_value_slice();
+            let current = Instant::now();
+            let search_value = db.get(key).expect("error found during searching the value");
+
+            query_time += current.elapsed().as_millis();
+            assert!(search_value.is_some());
+            println!("INFO: successfully searched a key");
+            assert_eq!(target_value, search_value.unwrap().get_value_slice());
+        });
+        println!(
+            "avg query latency for get is {} ms",
+            query_time as f64 / SAMPLE_SIZE as f64
+        );
+        need_stop.store(true, Ordering::Relaxed);
+        t.join().expect("join failure");
+        db.close()?;
         Ok(())
     }
 }

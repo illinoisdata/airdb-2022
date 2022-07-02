@@ -42,6 +42,14 @@ impl Range {
         self.length == 0
     }
 
+    pub fn get_offset(&self) -> u64 {
+        self.offset
+    }
+
+    pub fn get_length(&self) -> u64 {
+        self.length
+    }
+
     pub fn transfer_from(std_range: &std::ops::Range<u64>) -> Self {
         // std_range.end == 0 means the range is from the start to the end of the segment
         if std_range.end == 0 {
