@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, thread};
+use std::{collections::HashMap, sync::Arc, thread, time::Instant};
 
 use azure_core::{headers::get_from_headers, HttpError};
 use azure_storage::clients::{AsStorageClient, StorageAccountClient, StorageClient};
@@ -20,6 +20,9 @@ use crate::{
 };
 
 use super::{file_utils::Range, storage_connector::StorageConnector};
+
+pub static mut STORAGE_READ_TIME: u128 = 0;
+pub static mut STORAGE_ACCESS_NUMBER: u32 = 0;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename = "Error")]
@@ -46,10 +49,12 @@ pub struct AzureConnector {
 impl Default for AzureConnector {
     fn default() -> Self {
         let account = std::env::var("AZURE_ACCOUNTNAME")
-            .map_err(|_| MissingAzureAuthetication::boxed("Set env variable AZURE_ACCOUNTNAME")).expect("failed to get environment variable AZURE_ACCOUNTNAME");
+            .map_err(|_| MissingAzureAuthetication::boxed("Set env variable AZURE_ACCOUNTNAME"))
+            .expect("failed to get environment variable AZURE_ACCOUNTNAME");
 
         let key = std::env::var("AZURE_ACCOUNTKEY")
-            .map_err(|_| MissingAzureAuthetication::boxed("Set env variable AZURE_ACCOUNTKEY")).expect("failed to get environment variable AZURE_ACCOUNTKEY");
+            .map_err(|_| MissingAzureAuthetication::boxed("Set env variable AZURE_ACCOUNTKEY"))
+            .expect("failed to get environment variable AZURE_ACCOUNTKEY");
 
         let http_client = azure_core::new_http_client();
         Self {
@@ -63,7 +68,6 @@ impl Default for AzureConnector {
 }
 
 impl StorageConnector for AzureConnector {
-
     fn open(&mut self, _props: &HashMap<String, String>) -> GResult<()> {
         Ok(())
     }
@@ -73,15 +77,22 @@ impl StorageConnector for AzureConnector {
         Ok(())
     }
 
-    
     fn read_all(&self, path: &Url) -> GResult<Vec<u8>> {
-        self.run_time.block_on(self.read_all_async(path))
+        // let start = Instant::now();
+        let res = self.run_time.block_on(self.read_all_async(path));
+        // unsafe {
+        //     STORAGE_READ_TIME += start.elapsed().as_millis();
+        //     STORAGE_ACCESS_NUMBER += 1;
+        // }
+        res
     }
 
     fn read_range(&self, path: &Url, range: &Range) -> GResult<Vec<u8>> {
         // self.run_time.block_on(self.read_range_async(path, range))
+
+        // let start = Instant::now();
         let response_res = self.run_time.block_on(self.read_range_async(path, range));
-        match response_res {
+        let res = match response_res {
             Ok(response) => {
                 // println!("INFO: read-range response: {:?}", response);
                 Ok(response)
@@ -95,7 +106,12 @@ impl StorageConnector for AzureConnector {
                 );
                 Err(err)
             }
-        }
+        };
+        // unsafe {
+        //     STORAGE_READ_TIME += start.elapsed().as_millis();
+        //     STORAGE_ACCESS_NUMBER += 1;
+        // }
+        res
     }
 
     fn get_size(&self, path: &Url) -> GResult<u64> {

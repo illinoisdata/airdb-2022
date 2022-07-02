@@ -1,4 +1,10 @@
-use std::{cmp::Ordering, collections::HashSet};
+use std::{
+    cmp::Ordering,
+    collections::HashSet,
+    fmt::{Display, Formatter},
+};
+
+use itertools::Itertools;
 
 use crate::{
     common::{bytebuffer::ByteBuffer, error::GResult, readbuffer::ReadBuffer, serde::Serde},
@@ -86,6 +92,18 @@ impl SegDesc {
     pub fn get_id(&self) -> SegID {
         self.seg_id
     }
+
+    pub fn has_stats(&self) -> bool {
+        self.min.is_some()
+    }
+
+    pub fn get_min_slice(&self) -> &[u8] {
+        self.min.as_ref().unwrap()
+    }
+
+    pub fn get_max_slice(&self) -> &[u8] {
+        self.max.as_ref().unwrap()
+    }
 }
 
 impl Serde<SegDesc> for SegDesc {
@@ -141,7 +159,20 @@ pub struct LevelSegDesc {
     /// The number of segments in the level.
     seg_num: u32,
     segs_desc: Vec<SegDesc>,
-    // segs_desc: BinaryHeap<SegDesc>
+}
+
+impl Display for LevelSegDesc {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "LevelSegDesc(seg_num: {}, segs_desc: {:?})",
+            self.seg_num,
+            self.segs_desc
+                .iter()
+                .map(|seg| SegIDUtil::get_readable_segid(seg.get_id()))
+                .collect::<Vec<String>>(),
+        )
+    }
 }
 
 impl LevelSegDesc {
@@ -149,7 +180,6 @@ impl LevelSegDesc {
         Self {
             seg_num: seg_num_new,
             segs_desc: segs_desc_new,
-            // segs_desc: BinaryHeap::from(segs_desc_new),
         }
     }
 
@@ -163,9 +193,7 @@ impl LevelSegDesc {
 
     pub fn get_segs(&self) -> Vec<SegDesc> {
         //TODO: find a optimized structure for segs_desc
-        let mut segs = self.segs_desc.clone();
-        segs.sort_by(|a, b| b.cmp(a));
-        segs
+        self.segs_desc.clone()
     }
 
     pub fn append_level_delta(&mut self, level_delta: &LevelDelta) {
@@ -180,8 +208,20 @@ impl LevelSegDesc {
     }
 
     fn append_segs(&mut self, segs: &[SegDesc]) {
-        // segs.iter().for_each(|seg|{self.segs_desc.push(*seg)});
-        self.segs_desc.extend_from_slice(segs);
+        // self.segs_desc.extend_from_slice(segs);
+        //TODO: optimize for performance
+        segs.iter().for_each(|seg| {
+            let insert_seg = seg.clone();
+            let target_pos = self.segs_desc.iter().enumerate().find(|(_id, seg)| {
+                SegIDUtil::get_pure_id(seg.get_id()) > SegIDUtil::get_pure_id(insert_seg.get_id())
+            });
+            if let Some((idx, _seg)) = target_pos {
+                self.segs_desc.insert(idx, insert_seg)
+            } else {
+                // can't find an element larger than insert_seg, append to the tail
+                self.segs_desc.push(insert_seg);
+            }
+        });
         self.seg_num = self.segs_desc.len() as u32;
     }
 
@@ -204,6 +244,21 @@ pub struct LsmTreeDesc {
     level_num: u8,
     levels_desc: Vec<LevelSegDesc>,
     tail_desc: SegDesc,
+}
+
+impl Display for LsmTreeDesc {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "LsmTreeDesc(level_num: {}, levels_desc: {:?}, tail_desc: {})",
+            self.level_num,
+            self.levels_desc
+                .iter()
+                .map(|level| format!("{}", level))
+                .collect::<Vec<String>>(),
+            SegIDUtil::get_readable_segid(self.tail_desc.get_id())
+        )
+    }
 }
 
 impl LsmTreeDesc {
@@ -269,5 +324,21 @@ impl LsmTreeDesc {
                 }
             }
         }
+    }
+
+    pub fn get_read_sequence(&self, search_key: &[u8]) -> Vec<SegDesc> {
+        //TODO: optimize to improve performance
+        self.levels_desc
+            .iter()
+            .flat_map(|level_desc| level_desc.get_segs())
+            // .filter(|seg| {
+            //     !seg.has_stats() || {
+            //         seg.get_min_slice() <= search_key && seg.get_min_slice() >= search_key
+            //         // seg.get_min_slice().cmp(search_key) == Ordering::Less
+            //         //     && seg.get_max_slice().cmp(search_key) == Ordering::Greater
+            //     }
+            // })
+            .sorted_by_key(|seg_desc| -(SegIDUtil::get_pure_id(seg_desc.get_id()) as i32))
+            .collect()
     }
 }

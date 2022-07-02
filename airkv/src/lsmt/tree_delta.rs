@@ -1,7 +1,7 @@
 use crate::{
     common::{bytebuffer::ByteBuffer, error::GResult, readbuffer::ReadBuffer, serde::Serde},
     compaction::compaction_task::TaskDesc,
-    storage::{seg_util::SegIDUtil, segment::SegID},
+    storage::{seg_util::SegIDUtil, segment::SegID}, db::rw_db::Key,
 };
 
 use super::level_seg_desc::{LevelSegDesc, SegDesc};
@@ -95,7 +95,7 @@ impl TreeDelta {
         }
     }
 
-    pub fn new_from_compation(task_desc: &TaskDesc) -> Self {
+    pub fn new_from_compation(task_desc: &TaskDesc, dest_seg_min: Option<Key>, dest_seg_max: Option<Key>) -> Self {
         //TODO: add min max info to delta
         let from_level = LevelDelta::new(
             task_desc.get_compact_level(),
@@ -109,7 +109,7 @@ impl TreeDelta {
         let to_level = LevelDelta::new(
             task_desc.get_compact_level() + 1,
             true,
-            vec![SegDesc::new_from_id(task_desc.get_dest_seg())],
+            vec![SegDesc::new(task_desc.get_dest_seg(), dest_seg_min, dest_seg_max)],
         );
         Self {
             levels_delta: vec![from_level, to_level],
@@ -194,6 +194,8 @@ impl TreeDelta {
     pub fn get_levels_delta(&self) -> &[LevelDelta] {
         &self.levels_delta
     }
+
+
 }
 
 impl Serde<TreeDelta> for TreeDelta {

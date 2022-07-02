@@ -1,10 +1,13 @@
+use std::time::Instant;
+
 use crate::{
     common::error::GResult,
     io::{file_utils::Range, storage_connector::StorageConnector},
     lsmt::level_seg_desc::LsmTreeDesc,
     storage::{
         data_entry::EntryAccess,
-        segment::{Entry, SegLen},
+        seg_util::SegIDUtil,
+        segment::{BlockNum, Entry, SegLen, SEG_BLOCK_NUM_LIMIT},
         segment_manager::SegmentManager,
     },
 };
@@ -12,13 +15,19 @@ use crate::{
 #[derive(Debug)]
 pub struct Snapshot {
     tail_len: SegLen,
+    tail_block: BlockNum,
     lsmt_desc: LsmTreeDesc,
 }
 
 impl Snapshot {
-    pub fn new(tail_size_new: SegLen, lsmt_desc_new: LsmTreeDesc) -> Self {
+    pub fn new(
+        tail_size_new: SegLen,
+        tail_block_new: BlockNum,
+        lsmt_desc_new: LsmTreeDesc,
+    ) -> Self {
         Self {
             tail_len: tail_size_new,
+            tail_block: tail_block_new,
             lsmt_desc: lsmt_desc_new,
         }
     }
@@ -29,13 +38,20 @@ impl Snapshot {
         seg_manager: &mut SegmentManager,
         key: &[u8],
     ) -> GResult<Option<Entry>> {
-        let level_num = self.lsmt_desc.get_level_num();
         // search in the tail segment
         let tail_search_res = if self.tail_len != 0 {
             // search in the tail segment
-            seg_manager
-                .get_data_seg(self.lsmt_desc.get_tail())
-                .search_entry_in_range(conn, key, &Range::new(0, self.tail_len))?
+            unsafe {
+                if self.tail_block < SEG_BLOCK_NUM_LIMIT {
+                    seg_manager
+                        .get_data_seg(self.lsmt_desc.get_tail())
+                        .search_entry_in_range(conn, key, &Range::new(0, self.tail_len))?
+                } else {
+                    seg_manager
+                        .get_data_seg(self.lsmt_desc.get_tail())
+                        .search_entry(conn, key, false)?
+                }
+            }
         } else {
             None
         };
@@ -44,13 +60,36 @@ impl Snapshot {
             Ok(tail_search_res)
         } else {
             // search in level0-N
-            let mut result: Option<Entry> = None;
-            let mut cur_level = 0u8;
-            while result.is_none() && cur_level < level_num {
-                result = self.get_entry_from_level(conn, seg_manager, cur_level, key)?;
-                cur_level += 1;
+            let candidates = self.lsmt_desc.get_read_sequence(key);
+            let search_res = candidates
+                .iter()
+                .map(|seg| {
+                    seg_manager
+                        .get_data_seg(seg.get_id())
+                        .search_entry(conn, key, false)
+                        .unwrap_or_else(|_| {
+                            panic!(
+                                "failed to search for file {}",
+                                SegIDUtil::get_readable_segid(seg.get_id())
+                            )
+                        })
+                })
+                .find(|res| res.is_some());
+
+            match search_res {
+                Some(res) => Ok(res),
+                None => {
+                    // println!("current tree: {}", self.lsmt_desc);
+                    // println!(
+                    //     "current candidate segs: {:?}",
+                    //     candidates
+                    //         .iter()
+                    //         .map(|seg| SegIDUtil::get_readable_segid(seg.get_id()))
+                    //         .collect::<Vec<String>>()
+                    // );
+                    Ok(None)
+                }
             }
-            Ok(result)
         }
     }
 
@@ -68,7 +107,7 @@ impl Snapshot {
             .map(|seg| {
                 seg_manager
                     .get_data_seg(seg.get_id())
-                    .search_entry(conn, key)
+                    .search_entry(conn, key, false)
             })
             .find(|res| match res {
                 Ok(entry_option) => entry_option.is_some(),

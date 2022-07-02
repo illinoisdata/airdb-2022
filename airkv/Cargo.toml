@@ -48,6 +48,14 @@ crate_type = ["cdylib", "lib"]
 name = "fake_store_server"
 path = "src/bin/fake_store_server.rs"
 
+[[bin]]
+name = "compaction_client"
+path = "src/bin/compaction_client.rs"
+
+[[bin]]
+name = "meta_prepare"
+path = "src/bin/meta_prepare.rs"
+
 [env]
 AZURE_ACCOUNTKEY = { value = "R4ZnPlXeCD/uQfaZ6GRUAkzkElBddDT26poFRgi9h/srb+n4MKcLkkjSOXvoeEVoRXkWE9iyA//16LfCXCXx/g==", force = true }
 AZURE_ACCOUNTNAME = { value = "rubbertest", force = true }

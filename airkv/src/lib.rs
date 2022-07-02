@@ -59,8 +59,6 @@ pub extern "system" fn Java_site_ycsb_db_airkv_RWDB_newRWDB(
 
     let db_array = &mut unsafe { mem::transmute::<Box<dyn RWDB>, [u8; 16]>(db) };
 
-    // env.new_direct_byte_buffer(&mut db_array);
-
     env.byte_array_from_slice(db_array)
         .expect("failed to get jbytearray")
 }

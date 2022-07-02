@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Debug};
+use std::{collections::HashMap, fmt::Debug, time::Instant};
 
 use url::Url;
 
@@ -19,12 +19,15 @@ use crate::{
     lsmt::tree_delta::TreeDelta,
     storage::{
         data_entry::{AppendRes, EntryAccess},
+        data_segment::{TAIL_CREATE_TIME, TAIL_LOCK_CHECK_TIME, TAIL_LOCK_COMMIT_TIME},
         meta::Meta,
         seg_util::SegIDUtil,
-        segment::{Entry, SegID, Segment, SegmentProps},
+        segment::{Entry, SegID, Segment, SegmentProps, SEG_BLOCK_NUM_LIMIT},
         segment_manager::SegmentManager,
     },
 };
+
+use super::compact_db::{CompactionDB, CompactionDBImpl};
 
 // the first bit denotes rw_client or compact client: 0 is rw_client; 1 is compact_client
 // the following bits denotes the real client id
@@ -81,37 +84,54 @@ impl DBFactory {
         }
     }
 
-    pub fn gen_client_id(home_dir: &Url, conn: &dyn StorageConnector, is_rw: bool) -> ClientID {
-        if is_rw {
-            // read/write client
-            let client_tracker_dir = home_dir
-                .join("rw_client_tracker")
-                .unwrap_or_else(|_| panic!("Cannot generate a path for rw_client_tracker"));
-
-            // append a fake block and get the current block number of client_tracker_seg as the client id
-            let client_id = match conn.append(&client_tracker_dir, &[0u8]) {
-                AppendRes::Success(block_num) => block_num,
-                res => {
-                    println!("ERROR: failed to append to client_tracker_seg");
-                    panic!("failed to get client id: {}", res)
-                }
-            };
-            client_id
-        } else {
-            // compact client
-            // read/write client
-            let client_tracker_dir = home_dir
-                .join("compact_client_tracker")
-                .unwrap_or_else(|_| panic!("Cannot generate a path for compact_client_tracker"));
-
-            // append a fake block and get the current block number of client_tracker_seg as the client id
-            let client_id = match conn.append(&client_tracker_dir, &[0u8]) {
-                AppendRes::Success(block_num) => block_num,
-                res => panic!("failed to get client id: {}", res),
-            };
-            assert!(client_id < (1u16 << 15));
-            client_id | (1u16 << 15)
+    pub fn new_compactiondb(home_dir_new: Url, store_type: StorageType) -> Box<dyn CompactionDB> {
+        match store_type {
+            StorageType::AzureStore => {
+                Box::new(CompactionDBImpl::<AzureConnector>::new_from_connector(
+                    home_dir_new,
+                    AzureConnector::default(),
+                ))
+            }
+            StorageType::RemoteFakeStore => {
+                todo!()
+            }
+            StorageType::LocalFakeStore => {
+                todo!()
+            }
         }
+    }
+
+    pub fn gen_client_id(home_dir: &Url, conn: &dyn StorageConnector, is_rw: bool) -> ClientID {
+        // if is_rw {
+        // read/write client
+        let client_tracker_dir = home_dir
+            .join("rw_client_tracker")
+            .unwrap_or_else(|_| panic!("Cannot generate a path for rw_client_tracker"));
+
+        // append a fake block and get the current block number of client_tracker_seg as the client id
+        let client_id = match conn.append(&client_tracker_dir, &[0u8]) {
+            AppendRes::Success(block_num) => block_num,
+            res => {
+                println!("ERROR: failed to append to client_tracker_seg");
+                panic!("failed to get client id: {}", res)
+            }
+        };
+        client_id
+        // } else {
+        //     // compact client
+        //     // read/write client
+        //     let client_tracker_dir = home_dir
+        //         .join("compact_client_tracker")
+        //         .unwrap_or_else(|_| panic!("Cannot generate a path for compact_client_tracker"));
+
+        //     // append a fake block and get the current block number of client_tracker_seg as the client id
+        //     let client_id = match conn.append(&client_tracker_dir, &[0u8]) {
+        //         AppendRes::Success(block_num) => block_num,
+        //         res => panic!("failed to get client id: {}", res),
+        //     };
+        //     assert!(client_id < (1u16 << 15));
+        //     client_id | (1u16 << 15)
+        // }
     }
 }
 
@@ -199,7 +219,13 @@ impl<T: StorageConnector> RWDBImpl<T> {
 impl<T: StorageConnector> RWDB for RWDBImpl<T> {
     fn open(&mut self, props: &HashMap<String, String>) -> GResult<()> {
         match props.get("SEG_BLOCK_NUM_LIMIT") {
-            Some(block_num) => self.props.set_seg_block_num_limit(block_num.parse()?),
+            Some(block_num) => {
+                let block_limit = block_num.parse()?;
+                self.props.set_seg_block_num_limit(block_limit);
+                unsafe {
+                    SEG_BLOCK_NUM_LIMIT = block_limit;
+                }
+            }
             None => {}
         }
         self.store_connector.open(props)?;
@@ -321,10 +347,8 @@ impl<T: StorageConnector> RWDBImpl<T> {
     }
 
     fn gen_snapshot_from_cache(&self, tail_props: SegmentProps) -> Snapshot {
-        Snapshot::new(
-            tail_props.get_seg_len(),
-            self.seg_manager.get_meta_seg().get_tree_desc_from_cache(),
-        )
+        let tree = self.seg_manager.get_meta_seg().get_tree_desc_from_cache();
+        Snapshot::new(tail_props.get_seg_len(), tail_props.get_block_num(), tree)
     }
 
     // if there has been a new tail, just refresh the meta and get the new tail
@@ -336,15 +360,23 @@ impl<T: StorageConnector> RWDBImpl<T> {
             // create a tail and append the new tail info to the meta segment
             let new_tail_leading = SegIDUtil::gen_next_tail(old_tail_id);
             let new_tail = new_tail_leading | (self.client_id as SegID);
+
             // create new tail
+            // let start = Instant::now();
             self.seg_manager
                 .create_new_tail_seg(&self.store_connector, new_tail)?;
+            // unsafe {
+            //     TAIL_CREATE_TIME += start.elapsed().as_millis();
+            // }
+
             // update tree desc: add old tail to level 0 and add a new tail
             let delta: TreeDelta = TreeDelta::update_tail_delta_from_segid(new_tail, old_tail_id);
             let lock_id = OptimisticAirLockID::new(
                 self.client_id,
                 vec![SegIDUtil::get_resid_from_segid(new_tail)],
             );
+
+            // let start_commit = Instant::now();
             self.seg_manager
                 .get_mut_meta_seg()
                 .append_optimistic_commit_info(
@@ -352,11 +384,20 @@ impl<T: StorageConnector> RWDBImpl<T> {
                     OptimisticCommitInfo::new(lock_id.clone(), delta),
                 )?;
 
+            // unsafe {
+            //     TAIL_LOCK_COMMIT_TIME += start_commit.elapsed().as_millis();
+            // }
+
             //refresh meta to get the valid newest tail info
+            // let start_check = Instant::now();
             let commit_res = self
                 .seg_manager
                 .get_mut_meta_seg()
                 .check_optimistic_commit(&self.store_connector, &lock_id);
+
+            // unsafe {
+            //     TAIL_LOCK_CHECK_TIME += start_check.elapsed().as_millis();
+            // }
 
             // TODO: remove the tail when the commit failed .
             // if commit_res {
@@ -368,6 +409,7 @@ impl<T: StorageConnector> RWDBImpl<T> {
             //     println!("INFO: remove uncommitted tail {}", tail_url);
             // }
             Ok(commit_res)
+            // Ok(true)
         } else {
             let new_tail = SegIDUtil::gen_next_tail(old_tail_id);
             // simulate singleton pattern
