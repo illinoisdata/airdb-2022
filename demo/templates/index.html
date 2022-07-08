@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>AirIndex</title>
+        <link rel="stylesheet" href="styles.css">
+    </head>
+
+    <body>
+        <div class="parent upper">
+            <div class="block setting leftPad">
+                <h2>Dataset</h2>
+                <select id="dataset">
+                    <option>-- select a dataset --</option>
+                </select>
+            </div>
+            <div class="block setting"></div>
+        </div>
+
+        <div class="parent lower">
+            <div class="block display"></div>
+            <div class="block display">
+                <svg id="diy"></svg>
+            </div>
+            <div class="block display">
+                <svg id="airindex"></svg>
+            </div>
+        </div>
+
+        <svg>
+            <defs>
+                <marker id="arrow-head" markerWidth="8" markerHeight="8" refx="8" refy="4" orient="auto">
+                <path d="M0,0 L0,8 L8,4 L0,0" />
+                </marker>
+            </defs>
+        </svg>
+
+        <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+        <script src="https://d3js.org/d3.v7.min.js"></script>
+        <script src="scripts/dataset.js"></script>
+        <script src="scripts/diagram.js"></script>
+    </body>
+</html>
