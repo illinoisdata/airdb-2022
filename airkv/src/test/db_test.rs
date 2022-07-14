@@ -132,18 +132,18 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
-    // #[serial]
-    // fn fake_store_read_committed_multi_client_test_1() -> GResult<()> {
-    //     run_test(
-    //         StorageType::RemoteFakeStore,
-    //         |store_type: StorageType, home_url: Url| {
-    //             db_read_committed_multi_client_test_1(store_type, home_url)
-    //                 .expect("db_read_committed_multi_client_test_1 for fake connector");
-    //         },
-    //     )?;
-    //     Ok(())
-    // }
+    #[test]
+    #[serial]
+    fn fake_store_read_committed_multi_client_test_1() -> GResult<()> {
+        run_test(
+            StorageType::RemoteFakeStore,
+            |store_type: StorageType, home_url: Url| {
+                db_read_committed_multi_client_test_1(store_type, home_url)
+                    .expect("db_read_committed_multi_client_test_1 for fake connector");
+            },
+        )?;
+        Ok(())
+    }
 
     // #[test]
     // #[serial]
@@ -197,18 +197,18 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    #[serial]
-    fn azure_read_committed_multi_client_test_1() -> GResult<()> {
-        run_test(
-            StorageType::AzureStore,
-            |store_type: StorageType, home_url: Url| {
-                db_read_committed_multi_client_test_1(store_type, home_url)
-                    .expect("db_read_committed_multi_client_test_1 for azure connector");
-            },
-        )?;
-        Ok(())
-    }
+    // #[test]
+    // #[serial]
+    // fn azure_read_committed_multi_client_test_1() -> GResult<()> {
+    //     run_test(
+    //         StorageType::AzureStore,
+    //         |store_type: StorageType, home_url: Url| {
+    //             db_read_committed_multi_client_test_1(store_type, home_url)
+    //                 .expect("db_read_committed_multi_client_test_1 for azure connector");
+    //         },
+    //     )?;
+    //     Ok(())
+    // }
 
     // #[test]
     // #[serial]
@@ -315,11 +315,13 @@ mod tests {
 
         query_time = 0;
         // check the correctness of data by comparing with the sample
-        sample_entries.iter().for_each(|entry| {
+
+        sample_entries.iter().enumerate().for_each(|(idx, entry)| {
             let key = entry.get_key();
             let target_value = entry.get_value_slice();
             let current = Instant::now();
-            let search_value = db.get(key).expect("error found during searching the value");
+            let search_value = db.get(key)
+            .unwrap_or_else(|_| panic!("error found during searching the value with idx {}", idx));
 
             query_time += current.elapsed().as_millis();
             assert!(search_value.is_some());
@@ -432,6 +434,19 @@ mod tests {
         Ok(())
     }
 
+    // #[test]
+    // #[serial]
+    // fn azure_read_committed_multi_client_test_1() -> GResult<()> {
+    //     run_test(
+    //         StorageType::AzureStore,
+    //         |store_type: StorageType, home_url: Url| {
+    //             db_read_committed_multi_client_test_1(store_type, home_url)
+    //                 .expect("db_read_committed_multi_client_test_1 for azure connector");
+    //         },
+    //     )?;
+    //     Ok(())
+    // }
+
     fn db_read_committed_multi_client_test_1(store_type: StorageType, home: Url) -> GResult<()> {
         // multiple clients write and read
         let block_num_limit = match store_type {
@@ -441,7 +456,8 @@ mod tests {
         };
         let thread_num = match store_type {
             StorageType::RemoteFakeStore => 10,
-            StorageType::AzureStore => 7,
+            StorageType::AzureStore => 10,
+            // StorageType::AzureStore => 5,
             StorageType::LocalFakeStore => todo!(),
         };
         let handles: Vec<JoinHandle<()>> = (0..thread_num)

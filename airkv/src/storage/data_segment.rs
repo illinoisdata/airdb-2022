@@ -1,5 +1,8 @@
 use std::{collections::HashMap, slice::Iter, time::Instant};
 
+use azure_core::HttpError;
+use tonic::codegen::http::StatusCode;
+
 use super::{
     data_entry::{AppendRes, EntryAccess},
     segment::{Entry, ReadEntryIterator, SegSize, SegmentInfo},
@@ -11,11 +14,12 @@ use crate::{
     },
     common::{
         bytebuffer::ByteBuffer, dataslice::DataSlice, error::GResult,
-        read_bytebuffer::ReadByteBuffer, reverse_bytebuffer::ReversedByteBuffer,
+        read_bytebuffer::ReadByteBuffer, reverse_bytebuffer::ReversedByteBuffer, serde::Serde,
     },
     db::rw_db::Key,
     io::{file_utils::Range, storage_connector::StorageConnector},
     storage::segment::Segment,
+    transaction::{transaction::Transaction, transaction_access::TransactionAccess},
 };
 
 pub static mut APPEND_TIME: u128 = 0;
@@ -139,6 +143,23 @@ impl Segment for DataSegment {
     }
 }
 
+impl TransactionAccess for DataSegment {
+    fn append_transaction(
+        &mut self,
+        conn: &dyn StorageConnector,
+        txn: &dyn Transaction,
+    ) -> AppendRes<SegSize> {
+        let mut buffer = ByteBuffer::new();
+        txn.serialize(&mut buffer).expect("failed to serialize");
+        // let start = Instant::now();
+        let res = self.append_all(conn, buffer.to_view());
+        // unsafe {
+        //     APPEND_TIME += start.elapsed().as_millis();
+        // }
+        res
+    }
+}
+
 impl EntryAccess for DataSegment {
     /// append entries to the end of the segment
     /// only the tail segment can call this function
@@ -154,12 +175,13 @@ impl EntryAccess for DataSegment {
         for entry in entries {
             //in order to support backward read for tail/L0 segment
             // write in this order: value -> value length -> key -> key length
-            let value = entry.get_value_slice();
-            let key = entry.get_key_slice();
-            buffer.write_bytes(value);
-            buffer.write_u16(value.len() as u16);
-            buffer.write_bytes(key);
-            buffer.write_u16(key.len() as u16);
+            // let value = entry.get_value_slice();
+            // let key = entry.get_key_slice();
+            // buffer.write_bytes(value);
+            // buffer.write_u16(value.len() as u16);
+            // buffer.write_bytes(key);
+            // buffer.write_u16(key.len() as u16);
+            entry.serialize(&mut buffer).expect("failed to serialize");
         }
         // let start = Instant::now();
         let res = self.append_all(conn, buffer.to_view());
@@ -171,18 +193,16 @@ impl EntryAccess for DataSegment {
 
     // write entries from the beginning of the segment
     // only L1-LN segment can call this function
-    // fn write_all_entries<T>(&self, conn: &dyn StorageConnector, entries: T) -> GResult<()>
-    // where
-    //     T: Iterator<Item = Entry>,
     fn write_all_entries(&self, conn: &dyn StorageConnector, entries: Iter<Entry>) -> GResult<()> {
         let mut buffer = ByteBuffer::new();
         for entry in entries {
-            let value = entry.get_value_slice();
-            let key = entry.get_key_slice();
-            buffer.write_u16(key.len() as u16);
-            buffer.write_bytes(key);
-            buffer.write_u16(value.len() as u16);
-            buffer.write_bytes(value);
+            // let value = entry.get_value_slice();
+            // let key = entry.get_key_slice();
+            // buffer.write_u16(key.len() as u16);
+            // buffer.write_bytes(key);
+            // buffer.write_u16(value.len() as u16);
+            // buffer.write_bytes(value);
+            entry.serialize(&mut buffer)?;
         }
         self.write_all(conn, buffer.to_view())
     }
@@ -191,14 +211,15 @@ impl EntryAccess for DataSegment {
         &mut self,
         conn: &dyn StorageConnector,
     ) -> GResult<Box<dyn Iterator<Item = Entry>>> {
-        let data = self.read_all(conn)?;
-        if self.seg_info.append_seg() {
-            let data_buffer = ReversedByteBuffer::wrap(data);
-            Ok(Box::new(ReadEntryIterator::new(Box::new(data_buffer))))
-        } else {
-            let data_buffer = ReadByteBuffer::wrap(data);
-            Ok(Box::new(ReadEntryIterator::new(Box::new(data_buffer))))
-        }
+        // let data = self.read_all(conn)?;
+        let data = conn.read_all(self.get_path())?;
+
+        // if self.seg_info.append_seg() {
+        //     let data_buffer = ReversedByteBuffer::wrap(data);
+        //     Ok(Box::new(ReadEntryIterator::new(Box::new(data_buffer))))
+        // } else {
+        Ok(Box::new(ReadEntryIterator::new_from_vec(data)))
+        // }
     }
 
     fn read_range_entries(
@@ -206,14 +227,16 @@ impl EntryAccess for DataSegment {
         conn: &dyn StorageConnector,
         range: &Range,
     ) -> GResult<Box<dyn Iterator<Item = Entry>>> {
-        let data = self.read_range(conn, range)?;
-        if self.seg_info.append_seg() {
-            let data_buffer = ReversedByteBuffer::wrap(data);
-            Ok(Box::new(ReadEntryIterator::new(Box::new(data_buffer))))
-        } else {
-            let data_buffer = ReadByteBuffer::wrap(data);
-            Ok(Box::new(ReadEntryIterator::new(Box::new(data_buffer))))
-        }
+        // let data = self.read_range(conn, range)?;
+        // if self.seg_info.append_seg() {
+        //     let data_buffer = ReversedByteBuffer::wrap(data);
+        //     Ok(Box::new(ReadEntryIterator::new(Box::new(data_buffer))))
+        // } else {
+        //     let data_buffer = ReadByteBuffer::wrap(data);
+        //     Ok(Box::new(ReadEntryIterator::new(Box::new(data_buffer))))
+        // }
+        let data = conn.read_range(self.get_path(), range)?;
+        Ok(Box::new(ReadEntryIterator::new_from_vec(data)))
     }
 
     fn search_entry(
@@ -228,59 +251,104 @@ impl EntryAccess for DataSegment {
         } else if self.entry_cache.is_empty() {
             let data = conn.read_all(self.get_path())?;
             let data_len = data.len();
-            if self.seg_info.append_seg() {
-                //TODO: remove DataSlice wrap
-                let data_buffer = ReversedByteBuffer::wrap(DataSlice::wrap_vec(data));
-                let iter = ReadEntryIterator::new(Box::new(data_buffer));
-                iter.for_each(|entry| {
-                    if !self.entry_cache.contains(entry.get_key()) {
-                        self.entry_cache.insert(entry.get_key().clone(), entry);
-                    }
-                });
-                // update is_full, range properties
-                if !is_seg_mutable {
-                    self.entry_cache.set_full();
-                }
-                //TODO: take care of the upper bound (inclusive or not)
-                self.entry_cache.set_upper_bound(data_len as u64);
-            } else {
-                //TODO: remove DataSlice wrap
-                let data_buffer = ReadByteBuffer::wrap(DataSlice::wrap_vec(data));
-                let iter = ReadEntryIterator::new(Box::new(data_buffer));
-                iter.for_each(|entry| {
-                    self.entry_cache.insert(entry.get_key().clone(), entry);
-                });
-                // update is_full, range properties
-                if !is_seg_mutable {
-                    self.entry_cache.set_full();
-                }
-                //TODO: take care of the upper bound (inclusive or not)
-                self.entry_cache.set_upper_bound(data_len as u64);
-            }
-            Ok(self.entry_cache.get(key))
-        } else {
-            let old_bound = self.entry_cache.get_upper_bound();
-            let data = conn.read_range(self.get_path(), &Range::new(old_bound, 0))?;
-            let data_len = data.len();
-            assert!(self.seg_info.append_seg());
+            // if self.seg_info.append_seg() {
+            //     // //TODO: remove DataSlice wrap
+            //     // let data_buffer = ReversedByteBuffer::wrap(DataSlice::wrap_vec(data));
+            //     // let iter = ReadEntryIterator::new(Box::new(data_buffer));
+            //     // iter.for_each(|entry| {
+            //     //     if !self.entry_cache.contains(entry.get_key()) {
+            //     //         self.entry_cache.insert(entry.get_key().clone(), entry);
+            //     //     }
+            //     // });
+
+            //     let iter = ReadEntryIterator::new_from_vec(data);
+            //     iter.for_each(|entry| {
+            //             self.entry_cache.insert(entry.get_key().clone(), entry);
+            //     });
+
+            //     // update is_full, range properties
+            //     if !is_seg_mutable {
+            //         self.entry_cache.set_full();
+            //     }
+            //     //TODO: take care of the upper bound (inclusive or not)
+            //     self.entry_cache.set_upper_bound(data_len as u64);
+            // } else {
             //TODO: remove DataSlice wrap
-            let data_buffer = ReversedByteBuffer::wrap(DataSlice::wrap_vec(data));
-            let iter = ReadEntryIterator::new(Box::new(data_buffer));
-            let mut tmp_map: HashMap<Key, Entry> = HashMap::new();
+            let iter = ReadEntryIterator::new_from_vec(data);
             iter.for_each(|entry| {
-                if !tmp_map.contains_key(entry.get_key()) {
-                    tmp_map.insert(entry.get_key().clone(), entry);
-                }
+                self.entry_cache.insert(entry.get_key().clone(), entry);
             });
-            self.entry_cache.extend(tmp_map);
             // update is_full, range properties
             if !is_seg_mutable {
                 self.entry_cache.set_full();
             }
             //TODO: take care of the upper bound (inclusive or not)
-            self.entry_cache
-                .set_upper_bound(self.entry_cache.get_upper_bound() + data_len as u64);
+            self.entry_cache.set_upper_bound(data_len as u64);
+            // }
             Ok(self.entry_cache.get(key))
+        } else {
+            let old_bound = self.entry_cache.get_upper_bound();
+            let data_res = conn.read_range(self.get_path(), &Range::new(old_bound, 0));
+            // .unwrap_or_else(|_| panic!("failed to read range {}", Range::new(old_bound, 0)));
+
+            match data_res {
+                Ok(_) => {
+                    let data = data_res.unwrap();
+                    let data_len = data.len();
+                    // //TODO: remove DataSlice wrap
+                    // let data_buffer = ReversedByteBuffer::wrap(DataSlice::wrap_vec(data));
+                    // let iter = ReadEntryIterator::new(Box::new(data_buffer));
+                    // let mut tmp_map: HashMap<Key, Entry> = HashMap::new();
+                    // iter.for_each(|entry| {
+                    //     if !tmp_map.contains_key(entry.get_key()) {
+                    //         tmp_map.insert(entry.get_key().clone(), entry);
+                    //     }
+                    // });
+                    let iter = ReadEntryIterator::new_from_vec(data);
+                    let mut tmp_map: HashMap<Key, Entry> = HashMap::new();
+                    iter.for_each(|entry| {
+                        tmp_map.insert(entry.get_key().clone(), entry);
+                    });
+                    self.entry_cache.extend(tmp_map);
+                    assert!(self.seg_info.append_seg());
+
+                    // update is_full, range properties
+                    assert!(!is_seg_mutable);
+                    if !is_seg_mutable {
+                        self.entry_cache.set_full();
+                    }
+                    //TODO: take care of the upper bound (inclusive or not)
+                    self.entry_cache
+                        .set_upper_bound(self.entry_cache.get_upper_bound() + data_len as u64);
+                    Ok(self.entry_cache.get(key))
+                }
+                Err(e) => {
+                    let error = e.downcast::<HttpError>().unwrap();
+                    match *error {
+                        HttpError::StatusCode { status, body: _ } => {
+                            if status.as_u16() == 416 {
+                                // println!("XXX encounter 416 error");
+                                // if encounter InvalidRange error, check current seg length
+                                let props = conn.get_props(self.get_path())?;
+                                if props.get_seg_len() == old_bound {
+                                    // update is_full, range properties
+                                    assert!(!is_seg_mutable);
+                                    if !is_seg_mutable {
+                                        self.entry_cache.set_full();
+                                    }
+                                    Ok(self.entry_cache.get(key))
+                                } else {
+                                    Err(error)
+                                }
+                            } else {
+                                // if it is not InvalidRange error, throw it directly
+                                Err(error)
+                            }
+                        }
+                        other => Err(Box::new(other)),
+                    }
+                }
+            }
         }
     }
 
@@ -293,27 +361,38 @@ impl EntryAccess for DataSegment {
     ) -> GResult<Option<Entry>> {
         //TODO: use index to search
         assert!(range.get_offset() == 0);
-        if range.get_length() + range.get_offset() <= self.entry_cache.get_upper_bound() {
+        if range.get_upper_bound() <= self.entry_cache.get_upper_bound() {
+            //FIXME: can't read data out of the target range
+            assert!(range.get_upper_bound() == self.entry_cache.get_upper_bound());
             Ok(self.entry_cache.get(key))
         } else {
             let old_bound = self.entry_cache.get_upper_bound();
-            let data = conn.read_range(
-                self.get_path(),
-                &Range::new(
-                    old_bound,
-                    range.get_length() + range.get_offset() - old_bound,
-                ),
-            )?;
+            let data = conn
+                .read_range(
+                    self.get_path(),
+                    &Range::new(old_bound, range.get_upper_bound() - old_bound),
+                )
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "failed to read range {}",
+                        Range::new(old_bound, range.get_upper_bound() - old_bound,)
+                    )
+                });
             let data_len = data.len();
             assert!(self.seg_info.append_seg());
-            //TODO: remove DataSlice wrap
-            let data_buffer = ReversedByteBuffer::wrap(DataSlice::wrap_vec(data));
-            let iter = ReadEntryIterator::new(Box::new(data_buffer));
+            // //TODO: remove DataSlice wrap
+            // let data_buffer = ReversedByteBuffer::wrap(DataSlice::wrap_vec(data));
+            // let iter = ReadEntryIterator::new(Box::new(data_buffer));
+            // let mut tmp_map: HashMap<Key, Entry> = HashMap::new();
+            // iter.for_each(|entry| {
+            //     if !tmp_map.contains_key(entry.get_key()) {
+            //         tmp_map.insert(entry.get_key().clone(), entry);
+            //     }
+            // });
+            let iter = ReadEntryIterator::new_from_vec(data);
             let mut tmp_map: HashMap<Key, Entry> = HashMap::new();
             iter.for_each(|entry| {
-                if !tmp_map.contains_key(entry.get_key()) {
-                    tmp_map.insert(entry.get_key().clone(), entry);
-                }
+                tmp_map.insert(entry.get_key().clone(), entry);
             });
             self.entry_cache.extend(tmp_map);
             //TODO: take care of the upper bound (inclusive or not)
@@ -433,7 +512,7 @@ mod tests {
         assert!(entries_read.peek().is_some());
         data_entries
             .iter()
-            .rev()
+            // .rev()
             .zip(entries_read)
             .for_each(|(origin, read)| assert_eq!(*origin, read));
 
@@ -441,7 +520,7 @@ mod tests {
         let entries_read_cache = seg.read_all_entries(&first_conn)?;
         data_entries
             .iter()
-            .rev()
+            // .rev()
             .zip(entries_read_cache)
             .for_each(|(origin, read)| assert_eq!(*origin, read));
 
@@ -449,7 +528,7 @@ mod tests {
         let entries_read_cache_repeat = seg.read_all_entries(&first_conn)?;
         data_entries
             .iter()
-            .rev()
+            // .rev()
             .zip(entries_read_cache_repeat)
             .for_each(|(origin, read)| assert_eq!(*origin, read));
 
@@ -458,7 +537,8 @@ mod tests {
             // get target kv
             let target_entry = &data_entries[rand::thread_rng().gen_range(0..100)];
             // search kv
-            let search_entry_res = seg.search_entry(&first_conn, target_entry.get_key_slice(), false);
+            let search_entry_res =
+                seg.search_entry(&first_conn, target_entry.get_key_slice(), false);
             assert!(search_entry_res.is_ok());
             let search_entry_op = search_entry_res.unwrap();
             assert!(search_entry_op.is_some());
@@ -495,6 +575,8 @@ mod tests {
         //generate and append 100 random key-values (in batches of ten)
 
         let mut data_entries: Vec<Entry> = Vec::new();
+        let mut dup_entries: Vec<Entry> = Vec::new();
+
         fn gen_random_bytes() -> Vec<u8> {
             (0..1024).map(|_| rand::random::<u8>()).collect()
         }
@@ -503,7 +585,14 @@ mod tests {
             data_entries.push(Entry::new(gen_random_bytes(), gen_random_bytes()));
         });
 
+        data_entries.iter().for_each(|entry| {
+            dup_entries.push(Entry::new(entry.get_key().clone(), gen_random_bytes()));
+        });
+
         //write all
+        seg.write_all_entries(&first_conn, dup_entries.iter())?;
+
+        //insert duplicate keys with new values
         seg.write_all_entries(&first_conn, data_entries.iter())?;
 
         seg.seal(&first_conn)?;
@@ -536,7 +625,8 @@ mod tests {
             // get target kv
             let target_entry = &data_entries[rand::thread_rng().gen_range(0..100)];
             // search kv
-            let search_entry_res = seg.search_entry(&first_conn, target_entry.get_key_slice(), false);
+            let search_entry_res =
+                seg.search_entry(&first_conn, target_entry.get_key_slice(), false);
             assert!(search_entry_res.is_ok());
             let search_entry_op = search_entry_res.unwrap();
             assert!(search_entry_op.is_some());

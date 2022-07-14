@@ -1,8 +1,10 @@
 use url::Url;
 
+use crate::common::bytebuffer::ByteBuffer;
 use crate::common::dataslice::DataSlice;
 use crate::common::error::GResult;
 use crate::common::readbuffer::ReadBuffer;
+use crate::common::serde::Serde;
 use crate::io::file_utils::Range;
 use crate::io::storage_connector::StorageConnector;
 
@@ -156,6 +158,24 @@ impl Entry {
     }
 }
 
+impl Serde<Entry> for Entry {
+    fn serialize(&self, buffer: &mut ByteBuffer) -> GResult<()> {
+        buffer.write_u16(self.key.len() as u16);
+        buffer.write_bytes(&self.key);
+        buffer.write_u16(self.value.len() as u16);
+        buffer.write_bytes(&self.value);
+        Ok(())
+    }
+
+    fn deserialize(buffer: &mut ByteBuffer) -> Entry {
+        let key_len = buffer.read_u16() as usize;
+        let key = buffer.read_bytes(key_len);
+        let value_len = buffer.read_u16() as usize;
+        let value = buffer.read_bytes(value_len);
+        Entry::new(key, value)
+    }
+}
+
 impl Ord for Entry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.get_key().cmp(other.get_key())
@@ -214,7 +234,6 @@ impl PartialOrd for IdxEntry {
         Some(self.cmp(other))
     }
 }
-
 
 #[derive(Debug)]
 pub struct SegmentProps {
@@ -293,12 +312,20 @@ pub trait Segment {
 }
 
 pub struct ReadEntryIterator {
-    buffer: Box<dyn ReadBuffer>,
+    // buffer: Box<dyn ReadBuffer>,
+    buffer:  ByteBuffer,
 }
 
 impl ReadEntryIterator {
-    pub fn new(buffer_new: Box<dyn ReadBuffer>) -> Self {
+    // pub fn new(buffer_new: Box<dyn ReadBuffer>) -> Self {
+    //     Self { buffer: buffer_new }
+    // }
+    pub fn new(buffer_new: ByteBuffer) -> Self {
         Self { buffer: buffer_new }
+    }
+
+    pub fn new_from_vec(vec: Vec<u8>) -> Self {
+        Self { buffer: ByteBuffer::wrap(vec) }
     }
 }
 
@@ -307,11 +334,12 @@ impl Iterator for ReadEntryIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.buffer.has_remaining() {
-            let key_len = self.buffer.read_u16();
-            let key = self.buffer.read_bytes(key_len as usize);
-            let value_len = self.buffer.read_u16();
-            let value = self.buffer.read_bytes(value_len as usize);
-            Some(Entry::new(key, value))
+            // let key_len = self.buffer.read_u16();
+            // let key = self.buffer.read_bytes(key_len as usize);
+            // let value_len = self.buffer.read_u16();
+            // let value = self.buffer.read_bytes(value_len as usize);
+            // Some(Entry::new(key, value))
+            Some(Entry::deserialize(&mut self.buffer))
         } else {
             None
         }

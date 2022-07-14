@@ -98,12 +98,12 @@ impl StorageConnector for AzureConnector {
                 Ok(response)
             }
             Err(err) => {
-                println!(
-                    "ERROR: {:?} read range error for path {} + error: {:?}",
-                    thread::current().id(),
-                    path,
-                    err
-                );
+                // println!(
+                //     "ERROR: {:?} read range error for path {} + error: {:?}",
+                //     thread::current().id(),
+                //     path,
+                //     err
+                // );
                 Err(err)
             }
         };
@@ -378,11 +378,14 @@ impl AzureConnector {
             Err(err) => {
                 // println!("INFO: error response for append request: {:?}", err);
                 match err {
-                    HttpError::StatusCode { status: _, body } => {
+                    HttpError::StatusCode { status, body } => {
                         let azure_error = AzureError::from_str(body.as_str());
-                        AppendRes::append_res_from_azure_error(azure_error.code.as_str())
+                        AppendRes::append_res_from_azure_error(azure_error.code.as_str(), body)
                     }
-                    _ => AppendRes::<SegSize>::UnknownFailure,
+                    other =>{ 
+                        println!("ERROR: {:?}", other);
+                        AppendRes::<SegSize>::UnknownFailure
+                    }
                 }
             }
         }
@@ -498,7 +501,7 @@ mod tests {
         // skip BOM
         let azure_error: AzureError = AzureError::from_str(content);
         println!("INFO: {:?}", azure_error);
-        match AppendRes::append_res_from_azure_error(azure_error.code.as_str()) {
+        match AppendRes::append_res_from_azure_error(azure_error.code.as_str(), content.to_string()) {
             AppendRes::AppendToSealedFailure => {
                 println!("parsing succeed")
             }
