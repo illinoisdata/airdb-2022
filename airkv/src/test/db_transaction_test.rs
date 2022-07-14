@@ -146,18 +146,18 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    #[serial]
-    fn fake_store_single_client_txn_test() -> GResult<()> {
-        run_test(
-            StorageType::RemoteFakeStore,
-            |store_type: StorageType, home_url: Url| {
-                db_single_client_txn_test(store_type, home_url)
-                    .expect("db_single_client_txn_test for fake connector");
-            },
-        )?;
-        Ok(())
-    }
+    // #[test]
+    // #[serial]
+    // fn fake_store_single_client_txn_test() -> GResult<()> {
+    //     run_test(
+    //         StorageType::RemoteFakeStore,
+    //         |store_type: StorageType, home_url: Url| {
+    //             db_single_client_txn_test(store_type, home_url)
+    //                 .expect("db_single_client_txn_test for fake connector");
+    //         },
+    //     )?;
+    //     Ok(())
+    // }
 
     fn db_single_client_txn_test(db_type: StorageType, home_url: Url) -> GResult<()> {
         // create db
