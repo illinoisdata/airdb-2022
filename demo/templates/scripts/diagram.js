@@ -1,23 +1,25 @@
 var data = [
-    {
-    "text": "piecewise linear, 336 B",
-    "color": "orange",
-    "line": "line"
-    },
-    {
-    "text": "piecewise step, 28.6 KB",
-    "color": "black",
-    "line": "arrow"
-    },
-    {
-    "text": "data layer, 1.6 GB",
-    "color": "black",
-    "line": "none"
-    }
-  ];
-    
-createDiagram("#diy", data);
-createDiagram("#airindex", data);
+  {
+  "text": "piecewise linear, 336 B",
+  "color": "orange",
+  "line": "line"
+  },
+  {
+  "text": "piecewise step, 28.6 KB",
+  "color": "black",
+  "line": "arrow"
+  },
+  {
+  "text": "data layer, 1.6 GB",
+  "color": "black",
+  "line": "none"
+  }
+];
+
+$(document).ready(function() {
+  createDiagram("#diy-diagram", data);
+  createDiagram("#airindex-diagram", data);
+});
 
 function createDiagram(id, data) {
   

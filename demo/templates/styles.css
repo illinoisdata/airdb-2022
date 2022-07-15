@@ -1,49 +1,9 @@
 html, body {
-    width: 100%;
-    height: 100vh;
-    padding: 0;
-    background-color: whitesmoke;
-}
-
-/* upper & lower layers */
-.parent {
-    display: flex;
-    flex-direction: row;
-}
-
-.upper {
-    height: 30vh;
-}
-
-.lower {
-    height: 70vh;
-}
-
-/* blocks */
-.block {
-    margin: 5px;
-    background-color: white;
-}
-
-.setting {
-    width: 50%;
-}
-
-.display {
-    width: 33.33%;
-}
-
-/* dataset */
-.leftPad {
-    padding-left: 50px;
-}
-
-#dataset {
-    width: 60%;
+    height: 100%;
 }
 
 /* diagram */
-#diy, #airindex {
+svg {
     width: 100%;
     height: 100%;
 }
@@ -57,7 +17,7 @@ rect {
 }
 
 text {
-    font-size: 12px;
+    font-size: 16px;
     fill: black;
     text-anchor: middle;
     text-align: center;

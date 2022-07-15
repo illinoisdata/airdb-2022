@@ -4,31 +4,165 @@
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>AirIndex</title>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.1/dist/css/bootstrap.min.css" integrity="sha384-zCbKRCUGaJDkqS1kPbPd7TveP5iyJE0EjAuZQTgFLD2ylzuqKfdKlfG/eSrtxUkn" crossorigin="anonymous">
         <link rel="stylesheet" href="styles.css">
     </head>
 
-    <body>
-        <div class="parent upper">
-            <div class="block setting leftPad">
-                <h2>Dataset</h2>
-                <select id="dataset">
-                    <option>-- select a dataset --</option>
-                </select>
+    <body class="bg-light">
+        <div class="container-fluid h-100 d-flex flex-column">
+            <div class="row mx-1 my-3 bg-white">
+                <!-- dataset -->
+                <div class="col-md-4 col-sm-12">
+                    <h2 class="py-3">Dataset</h2>
+                    <select id="dataset-dropdown" class="custom-select">
+                        <option selected>-- select a dataset --</option>
+                    </select>
+                </div>
+                <!-- storage profile -->
+                <div class="col-md-8 col-sm-12">
+                    <div class="row">
+                        <div class="col-md-6 col-sm-12">
+                            <h2 class="py-3">Storage Profile</h2>
+                            <div class="custom-control custom-checkbox pb-2">
+                                <input type="checkbox" class="custom-control-input" id="affine-check">
+                                <label class="custom-control-label" for="affine-check">Use Affine</label>
+                            </div>
+                            <div class="row">
+                                <div class="col-10">
+                                    <input type="range" class="form-control-range" min="0" max="50" value="20" step="1" id="profile-time" onInput="$('#time-value').html($(this).val() + 'us')">
+                                </div>
+                                <div class="col-2">
+                                    <p id="time-value">20us</p>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-10">
+                                    <input type="range" class="form-control-range" min="0" max="2.5" value="2" step="0.1" id="profile-storage" onInput="$('#storage-value').html($(this).val() + 'GB/s')">
+                                </div>
+                                <div class="col-2">
+                                    <p id="storage-value">2GB/s</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6 col-sm-12">
+                            <svg id="profile-chart"></svg>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="block setting"></div>
+
+            <div class="row flex-grow-1">
+                <div class="col-md-8 col-sm-12">
+                    <div class="bg-white px-2 pb-3 h-100 d-flex flex-column">
+                        <div class="row flex-grow-1">
+                            <!-- DIY input -->
+                            <div class="col-md-6 col-sm-12 h-100 d-flex flex-column">
+                                <div class="row">
+                                    <h2 class="py-3">DIY Index</h2>
+                                </div>
+                                <div class="row flex-grow-1">
+                                    <div class="border p-3 h-100 d-flex flex-column">
+                                        <div class="row">
+                                            <div class="col-4">Select</div>
+                                            <div class="col-4">
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="radio" name="select-radio" id="diy-select1" value="option1" checked>
+                                                    <label class="form-check-label" for="diy-select1">
+                                                        Custom
+                                                    </label>
+                                                </div>
+                                            </div>
+                                            <div class="col-4">
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="radio" name="select-radio" id="diy-select2" value="option2">
+                                                    <label class="form-check-label" for="diy-select2">
+                                                        B-Tree
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="row pt-2">
+                                            <div class="col-4"># Layers</div>
+                                            <div class="col-6">
+                                                <input type="range" class="form-control-range" min="1" max="6" value="1" step="1" id="diy-layer" onInput="$('#layer-number').html($(this).val())">
+                                            </div>
+                                            <div class="col-2" id="layer-number">1</div>
+                                        </div>
+                                        <div class="row flex-grow-1">
+                                            <div id="layer-input" class="mx-3 pt-2">
+                                                <div class="row border-bottom">
+                                                    <div class="col-2 text-center">Layer</div>
+                                                    <div class="col-5 text-center">Func. Type</div>
+                                                    <div class="col-5 text-center">Precision(&Delta;)</div>
+                                                </div>
+                                                <div class="row pt-3" id="layer-1">
+                                                    <div class="col-2 text-center">1</div>
+                                                    <div class="col-5">
+                                                        <select class="custom-select">
+                                                            <option selected></option>
+                                                            <option value="linear">Linear</option>
+                                                            <option value="step">Step</option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-5">
+                                                        <input type="text" class="form-control">
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="row pt-3 mx-2">
+                                            <div class="col">
+                                                <div class="text-right">
+                                                    <button type="button" class="btn btn-primary">Build -></button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- DIY diagram -->
+                            <div class="col-md-6 col-sm-12 h-100 d-flex flex-column">
+                                <div class="row flex-grow-1">
+                                    <div class="col">
+                                        <svg id="diy-diagram"></svg>
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col">
+                                        <p class="text-center">Estimated Lookup Time<br>N/A</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- AirIndex diagram -->
+                <div class="col-md-4 col-sm-12">
+                    <div class="col-12 bg-white px-2 py-3 h-100 d-flex flex-column">
+                        <div class="row">
+                            <div class="col">
+                                <h2>AirIndex</h2>
+                            </div>
+                            <div class="col-auto">
+                                <button type="button" class="btn btn-primary">Tune</button>
+                            </div>
+                        </div>
+                        <div class="row flex-grow-1">
+                            <div class="col">
+                                <svg id="airindex-diagram"></svg>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col">
+                                <p class="text-center">Estimated Lookup Time<br>N/A</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
-        <div class="parent lower">
-            <div class="block display"></div>
-            <div class="block display">
-                <svg id="diy"></svg>
-            </div>
-            <div class="block display">
-                <svg id="airindex"></svg>
-            </div>
-        </div>
-
-        <svg>
+        <svg style="height: 0">
             <defs>
                 <marker id="arrow-head" markerWidth="8" markerHeight="8" refx="8" refy="4" orient="auto">
                 <path d="M0,0 L0,8 L8,4 L0,0" />
@@ -38,7 +172,8 @@
 
         <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
         <script src="https://d3js.org/d3.v7.min.js"></script>
-        <script src="scripts/dataset.js"></script>
+        <script src="scripts/input.js"></script>
+        <script src="scripts/chart.js"></script>
         <script src="scripts/diagram.js"></script>
     </body>
 </html>
