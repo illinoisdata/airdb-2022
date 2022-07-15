@@ -50,6 +50,10 @@ impl Range {
         self.length
     }
 
+    pub fn get_upper_bound(&self) -> u64 {
+        self.length + self.offset
+    }
+
     pub fn transfer_from(std_range: &std::ops::Range<u64>) -> Self {
         // std_range.end == 0 means the range is from the start to the end of the segment
         if std_range.end == 0 {
