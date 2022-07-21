@@ -45,93 +45,92 @@
                             </div>
                         </div>
                         <div class="col-md-6 col-sm-12">
-                            <svg id="profile-chart"></svg>
+                            <canvas id="profile-chart"></canvas>
                         </div>
                     </div>
                 </div>
             </div>
 
             <div class="row flex-grow-1">
-                <div class="col-md-8 col-sm-12">
-                    <div class="bg-white px-2 pb-3 h-100 d-flex flex-column">
-                        <div class="row flex-grow-1">
-                            <!-- DIY input -->
-                            <div class="col-md-6 col-sm-12 h-100 d-flex flex-column">
+                <!-- DIY input -->
+                <div class="col-md-4 col-sm-12">
+                    <div class="col-12 bg-white px-2 py-3 h-100 d-flex flex-column">
+                        <div class="row pl-4">
+                            <h2>DIY Index</h2>
+                        </div>
+                        <div class="row flex-grow-1 align-items-center justify-content-center">
+                            <div class="border p-3 h-100 d-flex flex-column">
                                 <div class="row">
-                                    <h2 class="py-3">DIY Index</h2>
+                                    <div class="col-4">Select</div>
+                                    <div class="col-4">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="select-radio" id="diy-select1" value="option1" checked>
+                                            <label class="form-check-label" for="diy-select1">
+                                                Custom
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="col-4">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="select-radio" id="diy-select2" value="option2">
+                                            <label class="form-check-label" for="diy-select2">
+                                                B-Tree
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="row pt-2">
+                                    <div class="col-4"># Layers</div>
+                                    <div class="col-6">
+                                        <input type="range" class="form-control-range" min="1" max="6" value="1" step="1" id="diy-layer" onInput="$('#layer-number').html($(this).val())">
+                                    </div>
+                                    <div class="col-2" id="layer-number">1</div>
                                 </div>
                                 <div class="row flex-grow-1">
-                                    <div class="border p-3 h-100 d-flex flex-column">
-                                        <div class="row">
-                                            <div class="col-4">Select</div>
-                                            <div class="col-4">
-                                                <div class="form-check">
-                                                    <input class="form-check-input" type="radio" name="select-radio" id="diy-select1" value="option1" checked>
-                                                    <label class="form-check-label" for="diy-select1">
-                                                        Custom
-                                                    </label>
-                                                </div>
+                                    <div id="layer-input" class="mx-3 pt-2">
+                                        <div class="row border-bottom">
+                                            <div class="col-2 text-center">Layer</div>
+                                            <div class="col-5 text-center">Func. Type</div>
+                                            <div class="col-5 text-center">Precision(&Delta;)</div>
+                                        </div>
+                                        <div class="row pt-3" id="layer-1">
+                                            <div class="col-2 text-center">1</div>
+                                            <div class="col-5">
+                                                <select class="custom-select">
+                                                    <option selected></option>
+                                                    <option value="linear">Linear</option>
+                                                    <option value="step">Step</option>
+                                                </select>
                                             </div>
-                                            <div class="col-4">
-                                                <div class="form-check">
-                                                    <input class="form-check-input" type="radio" name="select-radio" id="diy-select2" value="option2">
-                                                    <label class="form-check-label" for="diy-select2">
-                                                        B-Tree
-                                                    </label>
-                                                </div>
+                                            <div class="col-5">
+                                                <input type="text" class="form-control">
                                             </div>
                                         </div>
-                                        <div class="row pt-2">
-                                            <div class="col-4"># Layers</div>
-                                            <div class="col-6">
-                                                <input type="range" class="form-control-range" min="1" max="6" value="1" step="1" id="diy-layer" onInput="$('#layer-number').html($(this).val())">
-                                            </div>
-                                            <div class="col-2" id="layer-number">1</div>
-                                        </div>
-                                        <div class="row flex-grow-1">
-                                            <div id="layer-input" class="mx-3 pt-2">
-                                                <div class="row border-bottom">
-                                                    <div class="col-2 text-center">Layer</div>
-                                                    <div class="col-5 text-center">Func. Type</div>
-                                                    <div class="col-5 text-center">Precision(&Delta;)</div>
-                                                </div>
-                                                <div class="row pt-3" id="layer-1">
-                                                    <div class="col-2 text-center">1</div>
-                                                    <div class="col-5">
-                                                        <select class="custom-select">
-                                                            <option selected></option>
-                                                            <option value="linear">Linear</option>
-                                                            <option value="step">Step</option>
-                                                        </select>
-                                                    </div>
-                                                    <div class="col-5">
-                                                        <input type="text" class="form-control">
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div class="row pt-3 mx-2">
-                                            <div class="col">
-                                                <div class="text-right">
-                                                    <button type="button" class="btn btn-primary">Build -></button>
-                                                </div>
-                                            </div>
+                                    </div>
+                                </div>
+                                <div class="row pt-3 mx-2">
+                                    <div class="col">
+                                        <div class="text-right">
+                                            <button type="button" class="btn btn-primary" id="diy-button">Build -></button>
                                         </div>
                                     </div>
                                 </div>
                             </div>
-                            <!-- DIY diagram -->
-                            <div class="col-md-6 col-sm-12 h-100 d-flex flex-column">
-                                <div class="row flex-grow-1">
-                                    <div class="col">
-                                        <svg id="diy-diagram"></svg>
-                                    </div>
-                                </div>
-                                <div class="row">
-                                    <div class="col">
-                                        <p class="text-center">Estimated Lookup Time<br>N/A</p>
-                                    </div>
-                                </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- DIY diagram -->
+                <div class="col-md-4 col-sm-12">
+                    <div class="col-12 bg-white px-2 py-3 h-100 d-flex flex-column">
+                        <div class="row flex-grow-1">
+                            <div class="col">
+                                <svg class="loader d-none" id="diy-loader"></svg>
+                                <svg id="diy-diagram"></svg>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col">
+                                <p class="text-center">Estimated Lookup Time<br>N/A</p>
                             </div>
                         </div>
                     </div>
@@ -144,11 +143,12 @@
                                 <h2>AirIndex</h2>
                             </div>
                             <div class="col-auto">
-                                <button type="button" class="btn btn-primary">Tune</button>
+                                <button type="button" class="btn btn-primary" id="airindex-button">Tune</button>
                             </div>
                         </div>
                         <div class="row flex-grow-1">
                             <div class="col">
+                                <svg class="loader d-none" id="airindex-loader"></svg>
                                 <svg id="airindex-diagram"></svg>
                             </div>
                         </div>
@@ -172,6 +172,7 @@
 
         <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
         <script src="https://d3js.org/d3.v7.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <script src="scripts/input.js"></script>
         <script src="scripts/chart.js"></script>
         <script src="scripts/diagram.js"></script>

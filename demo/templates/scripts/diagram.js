@@ -1,25 +1,27 @@
-var data = [
-  {
-  "text": "piecewise linear, 336 B",
-  "color": "orange",
-  "line": "line"
-  },
-  {
-  "text": "piecewise step, 28.6 KB",
-  "color": "black",
-  "line": "arrow"
-  },
-  {
-  "text": "data layer, 1.6 GB",
-  "color": "black",
-  "line": "none"
-  }
-];
-
 $(document).ready(function() {
-  createDiagram("#diy-diagram", data);
-  createDiagram("#airindex-diagram", data);
+  $("#diy-button").click(function() {
+    onClickForDiagram("#diy-loader", "#diy-diagram");
+  });
+  $("#airindex-button").click(function() {
+    onClickForDiagram("#airindex-loader", "#airindex-diagram");
+  });
 });
+
+function onClickForDiagram(loader, id) {
+  $.ajax({
+    beforeSend: function() {
+      $(loader).removeClass('d-none');
+    },
+    complete: function() {
+      $(loader).addClass('d-none');
+    },
+    url: "/diagram",
+    type: "GET",
+    success: function(data) {
+      createDiagram(id, data);
+    }
+  });
+}
 
 function createDiagram(id, data) {
   
@@ -32,7 +34,7 @@ function createDiagram(id, data) {
     .enter()
     .append("rect")
     .attr("y", function(d, i) {
-        return 10 * (i + 1) + "%";
+        return 50 * (i + 1);
     })
     .attr("stroke", function(d) {
         return d.color;
@@ -48,7 +50,7 @@ function createDiagram(id, data) {
     })
     .attr("x", "50%")
     .attr("y", function(d, i) {
-        return 2.5 + 10 * (i + 1) + "%";
+        return 12.5 + 50 * (i + 1);
     });
   
   // line
@@ -63,9 +65,9 @@ function createDiagram(id, data) {
     if (d.line !== "none") {
       container.select('#line-' + i)
         .attr("x1", "50%")
-        .attr("y1", 5 + 10 * (i + 1) + "%")
+        .attr("y1", 25 + 50 * (i + 1))
         .attr("x2", "50%")
-        .attr("y2", 10 + 10 * (i + 1) + "%");
+        .attr("y2", 50 + 50 * (i + 1));
     }
     if (d.line === "arrow") {
       container.select('#line-' + i)
