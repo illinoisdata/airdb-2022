@@ -3,7 +3,11 @@ use std::{collections::HashMap, fmt::Debug, time::Instant};
 use url::Url;
 
 use crate::{
-    common::error::{AppendError, GResult},
+    common::{
+        bytebuffer::ByteBuffer,
+        error::{AppendError, GResult},
+        serde::Serde,
+    },
     consistency::{
         airlock::{CriticalOperation, TailUpdateCO},
         airlock_manager::AirLockManager,
@@ -25,6 +29,7 @@ use crate::{
         segment::{Entry, SegID, Segment, SegmentProps, SEG_BLOCK_NUM_LIMIT},
         segment_manager::SegmentManager,
     },
+    transaction::{optimistic_transaction::OptimisticTransaction, transaction::Transaction},
 };
 
 use super::compact_db::{CompactionDB, CompactionDBImpl};
@@ -138,13 +143,22 @@ impl DBFactory {
 pub trait RWDB {
     fn open(&mut self, props: &HashMap<String, String>) -> GResult<()>;
 
+    fn begin_transaction<'a>(
+        &'a mut self,
+        txn_options: &HashMap<String, String>,
+    ) -> Box<dyn Transaction + 'a>;
+
+    fn put_txn(&mut self, txn: &dyn Transaction) -> GResult<()>;
+
     fn put(&mut self, key: Key, value: Value) -> GResult<()>;
 
     fn put_entries(&mut self, entries: Vec<Entry>) -> GResult<()>;
 
+    fn put_bytes(&mut self, data: &[u8]) -> GResult<()>;
+
     fn get(&mut self, key: &Key) -> GResult<Option<Entry>>;
 
-    fn get_from_snapshot(&mut self, snapshot: Snapshot, key: &Key) -> GResult<Option<Entry>>;
+    fn get_from_snapshot(&mut self, snapshot: &Snapshot, key: &Key) -> GResult<Option<Entry>>;
 
     fn delete(&mut self, key: Key) -> GResult<()>;
 
@@ -247,11 +261,10 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
         Ok(())
     }
 
-    fn put_entries(&mut self, entries: Vec<Entry>) -> GResult<()> {
+    fn put_bytes(&mut self, data: &[u8]) -> GResult<()> {
         let tail_seg = self.seg_manager.get_cached_tail_seg();
         let tail_id = tail_seg.get_segid();
-        let entries_slice: &[Entry] = &entries;
-        match tail_seg.append_entries(&self.store_connector, entries_slice.iter()) {
+        match tail_seg.append_all(&self.store_connector, data) {
             AppendRes::Success(size) => {
                 if size < self.props.get_seg_block_num_limit() {
                     Ok(())
@@ -270,7 +283,7 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
                 self.create_or_get_updated_tail(tail_id)?;
                 // append to the new tail
                 // TODO: check how to converge
-                self.put_entries(entries)?;
+                self.put_bytes(data)?;
                 Ok(())
             }
             AppendRes::AppendToSealedFailure => {
@@ -280,14 +293,14 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
                     .get_refreshed_tail(&self.store_connector)?;
                 if updated_tail != tail_id {
                     // the tail has been updated, append to the new tail
-                    self.put_entries(entries)?;
+                    self.put_bytes(data)?;
                     Ok(())
                 } else {
                     // rarely go to this branch(it happens only when a client sealed the old tail but failed to update a new tail)
                     // the tail remains the same, try to update tail
                     self.create_or_get_updated_tail(tail_id)?;
                     // append to the new tail
-                    self.put_entries(entries)?;
+                    self.put_bytes(data)?;
                     Ok(())
                 }
             }
@@ -295,17 +308,35 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
         }
     }
 
-    fn get(&mut self, key: &Key) -> GResult<Option<Entry>> {
-        let mut tail_props = self.try_get_tail_props_from_cache()?;
-
-        while !tail_props.is_active_tail() {
-            // println!("try to get active tail");
-            tail_props = self.try_get_tail_props_updated()?;
-        }
-        self.get_from_snapshot(self.gen_snapshot_from_cache(tail_props), key)
+    fn put_txn(&mut self, txn: &dyn Transaction) -> GResult<()> {
+        let mut buffer = ByteBuffer::new();
+        txn.serialize(&mut buffer)?;
+        self.put_bytes(buffer.to_view())
     }
 
-    fn get_from_snapshot(&mut self, snapshot: Snapshot, key: &Key) -> GResult<Option<Entry>> {
+    fn put_entries(&mut self, entries: Vec<Entry>) -> GResult<()> {
+        let mut buffer = ByteBuffer::new();
+        for entry in entries {
+            // //in order to support backward read for tail/L0 segment
+            // // write in this order: value -> value length -> key -> key length
+            // let value = entry.get_value_slice();
+            // let key = entry.get_key_slice();
+            // buffer.write_bytes(value);
+            // buffer.write_u16(value.len() as u16);
+            // buffer.write_bytes(key);
+            // buffer.write_u16(key.len() as u16);
+            entry.serialize(&mut buffer)?;
+        }
+        // let start = Instant::now();
+        self.put_bytes(buffer.to_view())
+    }
+
+    fn get(&mut self, key: &Key) -> GResult<Option<Entry>> {
+        let snapshot = self.get_latest_valid_snapshot();
+        self.get_from_snapshot(&snapshot, key)
+    }
+
+    fn get_from_snapshot(&mut self, snapshot: &Snapshot, key: &Key) -> GResult<Option<Entry>> {
         snapshot.get_entry(&self.store_connector, &mut self.seg_manager, key)
     }
 
@@ -332,6 +363,27 @@ impl<T: StorageConnector> RWDB for RWDBImpl<T> {
     fn get_props(&self) -> &DBProps {
         &self.props
     }
+
+    fn begin_transaction<'a>(
+        &'a mut self,
+        txn_options: &HashMap<String, String>,
+    ) -> Box<dyn Transaction + 'a> {
+        match txn_options.get("TRANSACTION_STRATEGY") {
+            Some(strategy) => {
+                if strategy == "optimistic" {
+                    let snapshot = self.get_latest_valid_snapshot();
+                    Box::new(OptimisticTransaction::new(self, snapshot))
+                } else {
+                    panic!("ERROR: unsupported transaction strategy {}", strategy);
+                }
+            }
+            None => {
+                // in default cases, use optimistic transaction strategy
+                let snapshot = self.get_latest_valid_snapshot();
+                Box::new(OptimisticTransaction::new(self, snapshot))
+            }
+        }
+    }
 }
 
 impl<T: StorageConnector> RWDBImpl<T> {
@@ -346,9 +398,28 @@ impl<T: StorageConnector> RWDBImpl<T> {
         self.seg_manager.get_updated_tail_seg(conn).get_props(conn)
     }
 
+    fn get_latest_valid_snapshot(&mut self) -> Snapshot {
+        //TODO: find a better way to get the snapshot
+        let mut tail_props = self
+            .try_get_tail_props_from_cache()
+            .expect("failed to get tail_props_from_cache");
+
+        while !tail_props.is_active_tail() {
+            tail_props = self
+                .try_get_tail_props_updated()
+                .expect("failed to get tail props from updated meta");
+        }
+        self.gen_snapshot_from_cache(tail_props)
+    }
+
     fn gen_snapshot_from_cache(&self, tail_props: SegmentProps) -> Snapshot {
         let tree = self.seg_manager.get_meta_seg().get_tree_desc_from_cache();
-        Snapshot::new(tail_props.get_seg_len(), tail_props.get_block_num(), tree)
+        Snapshot::new(
+            tail_props.get_seg_len(),
+            tail_props.get_block_num(),
+            self.props.get_seg_block_num_limit(),
+            tree,
+        )
     }
 
     // if there has been a new tail, just refresh the meta and get the new tail

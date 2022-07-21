@@ -12,10 +12,13 @@ use crate::{
     },
 };
 
+type Version = u32;
+
 #[derive(Debug)]
 pub struct Snapshot {
     tail_len: SegLen,
     tail_block: BlockNum,
+    tail_max_block_size: BlockNum,
     lsmt_desc: LsmTreeDesc,
 }
 
@@ -23,13 +26,20 @@ impl Snapshot {
     pub fn new(
         tail_size_new: SegLen,
         tail_block_new: BlockNum,
+        tail_max_block_size_new: BlockNum,
         lsmt_desc_new: LsmTreeDesc,
     ) -> Self {
         Self {
             tail_len: tail_size_new,
             tail_block: tail_block_new,
+            tail_max_block_size: tail_max_block_size_new,
             lsmt_desc: lsmt_desc_new,
         }
+    }
+
+    pub fn get_version(&self) -> Version {
+        SegIDUtil::get_pure_id(self.lsmt_desc.get_tail()) * (self.tail_max_block_size as Version)
+            + (self.tail_block as Version)
     }
 
     pub fn get_entry(
@@ -41,17 +51,17 @@ impl Snapshot {
         // search in the tail segment
         let tail_search_res = if self.tail_len != 0 {
             // search in the tail segment
-            unsafe {
-                if self.tail_block < SEG_BLOCK_NUM_LIMIT {
-                    seg_manager
-                        .get_data_seg(self.lsmt_desc.get_tail())
-                        .search_entry_in_range(conn, key, &Range::new(0, self.tail_len))?
-                } else {
-                    seg_manager
-                        .get_data_seg(self.lsmt_desc.get_tail())
-                        .search_entry(conn, key, false)?
-                }
-            }
+            // unsafe {
+            // if self.tail_block < SEG_BLOCK_NUM_LIMIT {
+            seg_manager
+                .get_data_seg(self.lsmt_desc.get_tail())
+                .search_entry_in_range(conn, key, &Range::new(0, self.tail_len))?
+            // } else {
+            //     seg_manager
+            //         .get_data_seg(self.lsmt_desc.get_tail())
+            //         .search_entry(conn, key, false)?
+            // }
+            // }
         } else {
             None
         };

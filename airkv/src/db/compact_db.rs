@@ -11,7 +11,7 @@ use url::Url;
 use crate::{
     common::{
         bytebuffer::ByteBuffer, dataslice::DataSlice, error::GResult,
-        reverse_bytebuffer::ReversedByteBuffer,
+        reverse_bytebuffer::ReversedByteBuffer, serde::Serde,
     },
     compaction::compaction_task::{CompactionUtil, TaskDesc, TaskScheduler},
     consistency::optimistic_airlock::{OptimisticAirLockID, OptimisticCommitInfo},
@@ -119,13 +119,9 @@ impl<T: StorageConnector> CompactionDB for CompactionDBImpl<T> {
                             )
                         });
 
-                    // //TODO: remove DataSlice
-                    let data_buffer =
-                        ReversedByteBuffer::wrap(DataSlice::wrap(Rc::new(RefCell::new(seg))));
-                    let entries = ReadEntryIterator::new(Box::new(data_buffer));
-
+                    let entries = ReadEntryIterator::new(ByteBuffer::wrap(seg));
                     entries.enumerate().for_each(|(idx, entry)| {
-                        min_heap.push(Reverse(IdxEntry::new(idx as u32, entry)));
+                        min_heap.push(Reverse(IdxEntry::new(u32::MAX - (idx as u32), entry)));
                     });
                     min_heap
                 })
@@ -155,12 +151,7 @@ impl<T: StorageConnector> CompactionDB for CompactionDBImpl<T> {
                     }
                     merged_last_key = Some(idx_entry.get_key().clone());
                     let entry = idx_entry.get_entry();
-                    let value = entry.get_value_slice();
-                    let key = entry.get_key_slice();
-                    buffer.write_u16(key.len() as u16);
-                    buffer.write_bytes(key);
-                    buffer.write_u16(value.len() as u16);
-                    buffer.write_bytes(value);
+                    entry.serialize(&mut buffer)?;
                 }
                 let cur_queue_id = seg_number - idx_entry.get_idx() as usize;
                 let fill_in_entry = CompactionUtil::pop_next_valid_entry(
@@ -190,7 +181,7 @@ impl<T: StorageConnector> CompactionDB for CompactionDBImpl<T> {
                             )
                         });
                     let data_buffer = ByteBuffer::wrap(seg);
-                    ReadEntryIterator::new(Box::new(data_buffer))
+                    ReadEntryIterator::new(data_buffer)
                 })
                 .collect();
 
@@ -215,12 +206,7 @@ impl<T: StorageConnector> CompactionDB for CompactionDBImpl<T> {
                     }
                     merged_last_key = Some(idx_entry.get_key().clone());
                     let entry = idx_entry.get_entry();
-                    let value = entry.get_value_slice();
-                    let key = entry.get_key_slice();
-                    buffer.write_u16(key.len() as u16);
-                    buffer.write_bytes(key);
-                    buffer.write_u16(value.len() as u16);
-                    buffer.write_bytes(value);
+                    entry.serialize(&mut buffer)?;
                 }
                 // fill in merge_min_heap with the next element in the queue which pop the last entry
                 let cur_queue_id = seg_number - idx_entry.get_idx() as usize;

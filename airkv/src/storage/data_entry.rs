@@ -54,14 +54,16 @@ impl AppendRes<SegSize> {
         }
     }
 
-    pub fn append_res_from_azure_error(error: &str) -> Self {
-        match error {
+    pub fn append_res_from_azure_error(error_code: &str, error_str: String) -> Self {
+        match error_code {
             "BlobIsSealed" => AppendRes::AppendToSealedFailure,
             "BlockCountExceedsLimit" => AppendRes::BlockCountExceedFailure,
             // TODO: verify SegmentLengthExceedFailure
             "ContentLengthLargerThanTierLimit" => AppendRes::SegmentLengthExceedFailure,
             "BlobNotFound" => AppendRes::SegmentNotExsitFailure,
-            _ => AppendRes::<SegSize>::UnknownFailure,
+            other => {
+                println!("ERROR: append err_code: {}, err_body: {}", error_code, error_str); 
+                AppendRes::<SegSize>::UnknownFailure},
         }
     }
 }
@@ -91,7 +93,12 @@ pub trait EntryAccess {
         range: &Range,
     ) -> GResult<Box<dyn Iterator<Item = Entry>>>;
 
-    fn search_entry(&mut self, conn: &dyn StorageConnector, key: &[u8], is_seg_mutable: bool) -> GResult<Option<Entry>>;
+    fn search_entry(
+        &mut self,
+        conn: &dyn StorageConnector,
+        key: &[u8],
+        is_seg_mutable: bool,
+    ) -> GResult<Option<Entry>>;
 
     fn search_entry_in_range(
         &mut self,
@@ -107,5 +114,4 @@ pub trait EntryAccess {
         conn: &dyn StorageConnector,
         entries: Iter<Entry>,
     ) -> AppendRes<SegSize>;
-    
 }
