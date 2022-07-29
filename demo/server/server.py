@@ -8,10 +8,14 @@ app = Flask(__name__, static_folder='../templates', static_url_path='')
 def main():
     return send_from_directory(os.path.join('..', 'templates'), path)
 
-@app.route("/profile", methods=['GET'])
-def get_profile():
-    data = [1.5, 1.5, 2, 3]
-    return jsonify(data)
+@app.route("/dataset", methods=['GET'])
+def get_dataset():
+    dataset = [
+        "books_800M_uint64",
+        "fb_200M_uint64",
+        "osm_cellids_800M_uint64",
+        "wiki_ts_200M_uint64"]
+    return jsonify(dataset)
 
 @app.route("/diagram", methods=['GET'])
 def get_diagram():
