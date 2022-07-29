@@ -17,24 +17,14 @@ def get_dataset():
         "wiki_ts_200M_uint64"]
     return jsonify(dataset)
 
-@app.route("/diagram", methods=['GET'])
-def get_diagram():
+@app.route("/tune", methods=['GET'])
+def tune_diagram():
     time.sleep(0.3)
+    # Currently need to have 3 layers for it to work properly
     data = [
-        {
-        "text": "piecewise linear, 336 B",
-        "color": "orange",
-        "line": "line"
-        },
-        {
-        "text": "piecewise step, 28.6 KB",
-        "color": "black",
-        "line": "arrow"
-        },
-        {
-        "text": "data layer, 1.6 GB",
-        "color": "black",
-        "line": "none"
-        }
+        "336 B",
+        "28.6 KB",
+        "6.5 MB",
+        "1.6 GB",
     ]
     return jsonify(data)

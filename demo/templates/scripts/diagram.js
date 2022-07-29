@@ -15,12 +15,25 @@ function onClickForDiagram(loader, id) {
     complete: function() {
       $(loader).addClass('d-none');
     },
-    url: "/diagram",
+    url: "/tune",
     type: "GET",
     success: function(data) {
-      createDiagram(id, data);
+      createDiagram(id, combineInput(data));
     }
   });
+}
+
+function combineInput(data) {
+  var numLayer = $("#diy-layer").val();
+  var finalInput = [];
+  var idx = 0;
+  for (let i = numLayer; i > 0; i--) {
+    finalInput[idx] = "piecewise " + $(`#layer-${i} select`).val() + ", " + data[Math.floor(idx / 2)];
+    finalInput[idx + 1] = "\u0394 <= " + $(`#layer-${i} input`).val() + "B";
+    idx = idx + 2;
+  }
+  finalInput[idx] = "data layer, " + data[data.length - 1];
+  return finalInput;
 }
 
 function createDiagram(id, data) {
@@ -33,11 +46,29 @@ function createDiagram(id, data) {
     .data(data)
     .enter()
     .append("rect")
-    .attr("y", function(d, i) {
-        return 50 * (i + 1);
+    .attr("width", function(d, i) {
+      if (i % 2 == 0) {
+        return "70%";
+      } else {
+        return "40%";
+      }
     })
-    .attr("stroke", function(d) {
-        return d.color;
+    .attr("x", function(d, i) {
+      if (i % 2 == 0) {
+        return "15%";
+      } else {
+        return "30%";
+      }
+    })
+    .attr("y", function(d, i) {
+      return 50 * (i + 1);
+    })
+    .attr("stroke", function(d, i) {
+      if (i == 0 || i % 2 != 0) {
+        return "orange";
+      } else {
+        return "black";
+      }
     });
 
   // text
@@ -46,7 +77,7 @@ function createDiagram(id, data) {
     .enter()
     .append('text')
     .text(function(d) {
-      return d.text;
+      return d;
     })
     .attr("x", "50%")
     .attr("y", function(d, i) {
@@ -62,14 +93,14 @@ function createDiagram(id, data) {
       return "line-" + i;
     }); 
   data.map(function(d, i) {
-    if (d.line !== "none") {
+    if (i != data.length - 1) {
       container.select('#line-' + i)
         .attr("x1", "50%")
         .attr("y1", 25 + 50 * (i + 1))
         .attr("x2", "50%")
         .attr("y2", 50 + 50 * (i + 1));
     }
-    if (d.line === "arrow") {
+    if (i % 2 != 0) {
       container.select('#line-' + i)
         .attr("marker-end", "url(#arrow-head)");
     }
