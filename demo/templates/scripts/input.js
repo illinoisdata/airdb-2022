@@ -14,6 +14,12 @@ $(document).ready(function() {
     buildProfileChart();
 });
 
+// reset upon dataset change
+$("#dataset-dropdown").change(function() {
+    d3.select("#diy-diagram").selectAll("*").remove();
+    d3.select("#airindex-diagram").selectAll("*").remove();
+})
+
 // built each layer input
 $("#diy-layer").on('change', function() {
     $("#layer-input").children().not(":first-child").remove();
