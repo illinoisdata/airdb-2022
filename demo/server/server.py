@@ -1,6 +1,7 @@
 import os
 import time
 from flask import Flask, send_from_directory, jsonify
+import airindex
 
 app = Flask(__name__, static_folder='../templates', static_url_path='')
 
@@ -10,12 +11,7 @@ def main():
 
 @app.route("/dataset", methods=['GET'])
 def get_dataset():
-    dataset = [
-        "books_800M_uint64",
-        "fb_200M_uint64",
-        "osm_cellids_800M_uint64",
-        "wiki_ts_200M_uint64"]
-    return jsonify(dataset)
+    return jsonify(airindex.get_dataset())
 
 @app.route("/tune", methods=['GET'])
 def tune_diagram():
@@ -27,4 +23,4 @@ def tune_diagram():
         "6.5 MB",
         "1.6 GB",
     ]
-    return jsonify(data)
+    return jsonify(airindex.tune_data(data))
