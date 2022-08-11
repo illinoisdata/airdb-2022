@@ -1,63 +1,22 @@
 html, body {
-    width: 100%;
-    height: 100vh;
-    padding: 0;
-    background-color: whitesmoke;
-}
-
-/* upper & lower layers */
-.parent {
-    display: flex;
-    flex-direction: row;
-}
-
-.upper {
-    height: 30vh;
-}
-
-.lower {
-    height: 70vh;
-}
-
-/* blocks */
-.block {
-    margin: 5px;
-    background-color: white;
-}
-
-.setting {
-    width: 50%;
-}
-
-.display {
-    width: 33.33%;
-}
-
-/* dataset */
-.leftPad {
-    padding-left: 50px;
-}
-
-#dataset {
-    width: 60%;
-}
-
-/* diagram */
-#diy, #airindex {
-    width: 100%;
     height: 100%;
 }
 
+/* diagram */
+#diy-diagram, #airindex-diagram {
+    width: 100%;
+    height: 100%;
+    min-height: 450px;
+}
+
 rect {
-    width: 70%;
-    x: 15%;
-    height: 5%;
+    height: 25px;
     stroke-width: 2px;
     fill: white;
 }
 
 text {
-    font-size: 12px;
+    font-size: 16px;
     fill: black;
     text-anchor: middle;
     text-align: center;
@@ -66,4 +25,39 @@ text {
 
 line {
     stroke: black;
+}
+
+canvas {
+    width: 100%;
+    height: 100%;
+}
+
+/* loading spinner */
+.d-none {
+    display: none;
+}
+
+.loader {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    z-index: 1;
+    width: 120px;
+    height: 120px;
+    margin: -76px 0 0 -76px;
+    border: 16px solid #f3f3f3;
+    border-radius: 50%;
+    border-top: 16px solid #FFA500;
+    -webkit-animation: spin 2s linear infinite;
+    animation: spin 2s linear infinite;
+  }
+  
+@-webkit-keyframes spin {
+    0% { -webkit-transform: rotate(0deg); }
+    100% { -webkit-transform: rotate(360deg); }
+}
+  
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
 }
