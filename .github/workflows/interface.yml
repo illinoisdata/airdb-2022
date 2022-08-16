@@ -13,4 +13,4 @@ jobs:
           cp ./target/debug/libairindex.so ./demo/test
           mv ./demo/test/libairindex.so ./demo/test/airindex.so
       - name: Run Tests
-        run: python3 ./demo/test.py
+        run: python3 ./demo/test/test.py
