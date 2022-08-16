@@ -8,6 +8,17 @@ $(document).ready(function() {
 });
 
 function onClickForDiagram(loader, id) {
+  let numberOfLayers = $("#diy-layer").val();
+  let funcTypes = []
+  let deltas = []
+  for (let i = numberOfLayers; i > 0; i--) {
+    funcTypes.push($(`#layer-${i} select`).val());
+    deltas.push($(`#layer-${i} input`).val());
+  }
+  let input = {
+    "func": funcTypes,
+    "delta": deltas
+  }
   $.ajax({
     beforeSend: function() {
       $(loader).removeClass('d-none');
@@ -16,23 +27,25 @@ function onClickForDiagram(loader, id) {
       $(loader).addClass('d-none');
     },
     url: "/tune",
-    type: "GET",
+    type: "POST",
+    data: JSON.stringify(input),
+    contentType: "application/json",
     success: function(data) {
       createDiagram(id, combineInput(data));
     }
   });
 }
 
-function combineInput(data) {
-  var numLayer = $("#diy-layer").val();
+function combineInput(output) {
+  var functions = output.func;
+  var delta = output.delta;
+  var data = output.data;
   var finalInput = [];
-  var idx = 0;
-  for (let i = numLayer; i > 0; i--) {
-    finalInput[idx] = "piecewise " + $(`#layer-${i} select`).val() + ", " + data[Math.floor(idx / 2)];
-    finalInput[idx + 1] = "\u0394 <= " + $(`#layer-${i} input`).val() + "B";
-    idx = idx + 2;
+  for (let i = 0; i < functions.length; i++) {
+    finalInput[2 * i] = "piecewise " + functions[i] + ", " + data[i];
+    finalInput[2 * i + 1] = "\u0394 <= " + delta[i] + "B";
   }
-  finalInput[idx] = "data layer, " + data[data.length - 1];
+  finalInput.push("data layer, " + data[data.length - 1]);
   return finalInput;
 }
 

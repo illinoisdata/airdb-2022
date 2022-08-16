@@ -1,4 +1,5 @@
 use pyo3::prelude::*;
+use std::collections::HashMap;
 
 #[pyfunction]
 fn get_dataset() -> PyResult<Vec<String>> {
@@ -11,8 +12,17 @@ fn get_dataset() -> PyResult<Vec<String>> {
 }
 
 #[pyfunction]
-fn tune_data(data: Vec<String>) -> PyResult<Vec<String>> {
-    Ok(data)
+fn tune_data(param: HashMap<String, Vec<String>>) -> PyResult<HashMap<String, Vec<String>>> {
+    let mut output: HashMap<String, Vec<String>> = HashMap::new();
+    output.insert("func".to_owned(), param["func"].to_owned());
+    output.insert("delta".to_owned(), param["delta"].to_owned());
+    let data: Vec<String> = 
+        ["336 B".to_owned(),
+        "28.6 KB".to_owned(),
+        "6.5 MB".to_owned(),
+        "1.6 GB".to_owned()].to_vec();
+    output.insert("data".to_owned(), data);
+    Ok(output)
 }
 
 #[pymodule]
