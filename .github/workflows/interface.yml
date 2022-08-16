@@ -10,7 +10,7 @@ jobs:
       - name: Build
         run: |
           cargo build
-          cp ./target/debug/libairindex.dylib ./demo/test
-          mv ./demo/test/libairindex.dylib ./demo/test/airindex.so
+          cp ./target/debug/libairindex.so ./demo/test
+          mv ./demo/test/libairindex.so ./demo/test/airindex.so
       - name: Run Tests
         run: python3 ./demo/test.py
