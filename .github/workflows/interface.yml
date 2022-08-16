@@ -5,14 +5,14 @@ on: push
 jobs: 
   python_rust_interface:
     runs-on: ubuntu-latest
-    env:
-      working-directory: ./demo/test
     steps: 
       - uses: actions/checkout@v3
       - name: Build
+        working-directory: ./demo/test
         run: |
           cargo build
           cp ../../target/debug/libairindex.dylib .
           mv libairindex.dylib airindex.so
       - name: Run Tests
+        working-directory: ./demo/test
         run: python3 test.py
