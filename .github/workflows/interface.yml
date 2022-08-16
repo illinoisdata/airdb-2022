@@ -1,0 +1,17 @@
+name: Interface Check
+
+on: push
+
+jobs: 
+  python_rust_interface:
+    runs-on: ubuntu-latest
+    env:
+      working-directory: ./demo/test
+    steps: 
+      - uses: actions/checkout@v3
+      - name: Build
+        run: cargo build
+        run: cp ../../target/debug/libairindex.dylib .
+        run: mv libairindex.dylib airindex.so
+      - name: Run Tests
+        run: python3 test.py
