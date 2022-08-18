@@ -6,3 +6,4 @@ pub mod model;
 pub mod index;
 pub mod db;
 pub mod meta;
+pub mod interface;
