@@ -13,17 +13,22 @@ def main():
 def get_dataset():
     return jsonify(airindex.get_dataset())
 
-@app.route("/tune", methods=['POST'])
-def tune_diagram():
+@app.route("/diyCustom", methods=['POST'])
+def tune_diy_custom():
     time.sleep(0.3)
     # Currently need to have 3 layers for it to work properly
     param = request.json
-    # data = {
-    #     "func": param['func'],
-    #     "delta": param['delta'],
-    #     "data": ["336 B",
-    #             "28.6 KB",
-    #             "6.5 MB",
-    #             "1.6 GB"],
-    # }
-    return jsonify(airindex.tune_data(param))
+    return jsonify(airindex.tune_diy_custom(param["dataset"], param["affine"], param["latency"], param["bandwidth"], param["func"], param["delta"]))
+
+@app.route("/diyBTree", methods=['POST'])
+def tune_diy_btree():
+    time.sleep(0.3)
+    param = request.json
+    return jsonify(airindex.tune_diy_btree(param["dataset"], param["affine"], param["latency"], param["bandwidth"]))
+
+
+@app.route("/airindex", methods=['POST'])
+def tune_airindex():
+    time.sleep(0.3)
+    param = request.json
+    return jsonify(airindex.tune_airindex(param["dataset"], param["affine"], param["latency"], param["bandwidth"]))

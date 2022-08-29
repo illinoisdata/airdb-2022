@@ -18,6 +18,21 @@ $(document).ready(function() {
 $("#dataset-dropdown").change(function() {
     d3.select("#diy-diagram").selectAll("*").remove();
     d3.select("#airindex-diagram").selectAll("*").remove();
+    $("#diy-time br")[0].nextSibling.nodeValue = "N/A";
+    $("#airindex-time br")[0].nextSibling.nodeValue = "N/A";
+})
+
+// grey out form if B-Tree
+$("input[name=select-radio]").on('change', function() {
+    if (this.value === "Custom") {
+        $(".user-input").each(function() {
+            $(this).attr("disabled", false);
+        });
+    } else if (this.value == "B-Tree") {
+        $(".user-input").each(function() {
+            $(this).attr("disabled", true);
+        });
+    }
 })
 
 // built each layer input
@@ -28,13 +43,13 @@ $("#diy-layer").on('change', function() {
         var layer = $("<div>", {"class": "col-2 text-center"});
         layer.append(i);
         var funcDiv = $("<div>", {"class": "col-5"});
-        var dropdown = $("<select>", {"class": "custom-select"});
+        var dropdown = $("<select>", {"class": "custom-select user-input"});
         dropdown.append('<option selected></option>')
         dropdown.append($(new Option("Linear", "linear")));
         dropdown.append($(new Option("Step", "step")));
         funcDiv.append(dropdown);
         var precisionDiv = $("<div>", {"class": "col-5"});
-        precisionDiv.append('<input type="text" class="form-control">');
+        precisionDiv.append('<input type="text" class="form-control user-input">');
         parent.append(layer);
         parent.append(funcDiv);
         parent.append(precisionDiv);
@@ -44,7 +59,7 @@ $("#diy-layer").on('change', function() {
 
 // build storage profile
 $("#profile-time").on('change', function() {
-    $('#time-value').html($(this).val() + 's');
+    $('#time-value').html($(this).val() + 'ms');
     buildProfileChart();
 })
 
@@ -57,7 +72,7 @@ function buildProfileChart() {
     // get time data
     var latency = parseFloat($("#profile-time").val());
     var bandwidth = parseFloat($("#profile-storage").val());
-    time = dataAmount.map(d => latency + d / bandwidth);
+    time = dataAmount.map(d => latency + d / bandwidth * 1000);
     // remove the previous chart
     var prevChart = Chart.getChart("profile-chart");
     if (prevChart) {
@@ -81,7 +96,7 @@ function buildProfileChart() {
                 y: {
                     ticks: {
                         callback: function(value, index, ticks) {
-                            return value + " s";
+                            return value + " ms";
                         }
                     }
                 }
