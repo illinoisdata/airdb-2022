@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    common::{error::GResult, serde::Serde, bytebuffer::ByteBuffer},
+    common::{error::GResult, bytebuffer::ByteBuffer},
     consistency::snapshot::Snapshot,
     db::rw_db::{Key, RWDBImpl, Value, RWDB},
     io::storage_connector::StorageConnector,
@@ -11,7 +11,7 @@ use crate::{
 use super::transaction::Transaction;
 
 pub struct OptimisticTransaction<'a, T: StorageConnector> {
-    writeBuffer: HashMap<Key, Entry>,
+    write_buffer: HashMap<Key, Entry>,
     db: &'a mut RWDBImpl<T>,
     snapshot: Snapshot,
     readset: HashSet<Key>,
@@ -22,7 +22,7 @@ pub struct OptimisticTransaction<'a, T: StorageConnector> {
 impl<'a, T: StorageConnector> OptimisticTransaction<'a, T> {
     pub fn new(db_new: &'a mut RWDBImpl<T>, snapshot_new: Snapshot) -> Self {
         Self {
-            writeBuffer: HashMap::with_capacity(3),
+            write_buffer: HashMap::with_capacity(3),
             db: db_new,
             snapshot: snapshot_new,
             readset: HashSet::with_capacity(3),
@@ -34,14 +34,14 @@ impl<'a, T: StorageConnector> OptimisticTransaction<'a, T> {
 impl<'a, T: StorageConnector> Transaction for OptimisticTransaction<'a, T> {
     fn put(&mut self, key: Key, value: Value) -> GResult<()> {
         self.writeset.insert(key.clone());
-        self.writeBuffer.insert(key.clone(), Entry::new(key, value));
+        self.write_buffer.insert(key.clone(), Entry::new(key, value));
         Ok(())
     }
 
     fn get(&mut self, key: &Key) -> GResult<Option<Entry>> {
         self.readset.insert(key.clone());
         // first, try to get from writebuffer of the current transaction
-        let res = self.writeBuffer.get(key);
+        let res = self.write_buffer.get(key);
         if let Some(entry) = res {
             Ok(Some(entry.clone()))
         } else {
@@ -52,7 +52,7 @@ impl<'a, T: StorageConnector> Transaction for OptimisticTransaction<'a, T> {
     }
 
     fn delete(&mut self, key: Key) -> GResult<()> {
-        self.writeset.insert(key.clone());
+        self.writeset.insert(key);
         todo!()
     }
 

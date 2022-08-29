@@ -1,8 +1,6 @@
 use std::{
-    cell::RefCell,
     cmp::Reverse,
     collections::{BinaryHeap, HashMap},
-    rc::Rc,
 };
 
 use tokio::runtime::{Builder, Runtime};
@@ -10,8 +8,7 @@ use url::Url;
 
 use crate::{
     common::{
-        bytebuffer::ByteBuffer, dataslice::DataSlice, error::GResult,
-        reverse_bytebuffer::ReversedByteBuffer, serde::Serde,
+        bytebuffer::ByteBuffer, error::GResult, serde::Serde,
     },
     compaction::compaction_task::{CompactionUtil, TaskDesc, TaskScheduler},
     consistency::optimistic_airlock::{OptimisticAirLockID, OptimisticCommitInfo},

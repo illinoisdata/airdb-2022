@@ -1,4 +1,4 @@
-use crate::{common::error::GResult, io::storage_connector::StorageConnector, storage::{data_entry::AppendRes, segment::SegSize}};
+use crate::{io::storage_connector::StorageConnector, storage::{data_entry::AppendRes, segment::SegSize}};
 
 use super::transaction::Transaction;
 

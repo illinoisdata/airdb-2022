@@ -1,5 +1,5 @@
 use crate::{
-    common::{error::GResult, serde::Serde, bytebuffer::ByteBuffer},
+    common::{error::GResult, bytebuffer::ByteBuffer},
     db::rw_db::{Key, Value},
     storage::segment::Entry,
 };

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, thread, time::Instant};
+use std::{collections::HashMap, sync::Arc};
 
 use azure_core::{headers::get_from_headers, HttpError};
 use azure_storage::clients::{AsStorageClient, StorageAccountClient, StorageClient};
@@ -92,7 +92,7 @@ impl StorageConnector for AzureConnector {
 
         // let start = Instant::now();
         let response_res = self.run_time.block_on(self.read_range_async(path, range));
-        let res = match response_res {
+        match response_res {
             Ok(response) => {
                 // println!("INFO: read-range response: {:?}", response);
                 Ok(response)
@@ -106,12 +106,11 @@ impl StorageConnector for AzureConnector {
                 // );
                 Err(err)
             }
-        };
+        }
         // unsafe {
         //     STORAGE_READ_TIME += start.elapsed().as_millis();
         //     STORAGE_ACCESS_NUMBER += 1;
         // }
-        res
     }
 
     fn get_size(&self, path: &Url) -> GResult<u64> {
@@ -378,7 +377,7 @@ impl AzureConnector {
             Err(err) => {
                 // println!("INFO: error response for append request: {:?}", err);
                 match err {
-                    HttpError::StatusCode { status, body } => {
+                    HttpError::StatusCode { status: _, body } => {
                         let azure_error = AzureError::from_str(body.as_str());
                         AppendRes::append_res_from_azure_error(azure_error.code.as_str(), body)
                     }

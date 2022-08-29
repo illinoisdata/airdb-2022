@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env};
+use std::{collections::HashMap};
 
 use airkv::{
     io::{azure_conn::AzureConnector, storage_connector::StorageConnector},

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, thread, time::Duration};
+use std::{collections::HashMap, thread, time::Duration};
 
 use airkv::{db::rw_db::DBFactory, io::storage_connector::StorageType};
 use url::Url;

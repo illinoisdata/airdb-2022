@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Debug, time::Instant};
+use std::{collections::HashMap, fmt::Debug};
 
 use url::Url;
 
@@ -22,8 +22,7 @@ use crate::{
     },
     lsmt::tree_delta::TreeDelta,
     storage::{
-        data_entry::{AppendRes, EntryAccess},
-        data_segment::{TAIL_CREATE_TIME, TAIL_LOCK_CHECK_TIME, TAIL_LOCK_COMMIT_TIME},
+        data_entry::{AppendRes},
         meta::Meta,
         seg_util::SegIDUtil,
         segment::{Entry, SegID, Segment, SegmentProps, SEG_BLOCK_NUM_LIMIT},

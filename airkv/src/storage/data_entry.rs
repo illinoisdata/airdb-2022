@@ -61,7 +61,7 @@ impl AppendRes<SegSize> {
             // TODO: verify SegmentLengthExceedFailure
             "ContentLengthLargerThanTierLimit" => AppendRes::SegmentLengthExceedFailure,
             "BlobNotFound" => AppendRes::SegmentNotExsitFailure,
-            other => {
+            _other => {
                 println!("ERROR: append err_code: {}, err_body: {}", error_code, error_str); 
                 AppendRes::<SegSize>::UnknownFailure},
         }

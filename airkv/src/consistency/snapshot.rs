@@ -1,4 +1,4 @@
-use std::time::Instant;
+
 
 use crate::{
     common::error::GResult,
@@ -7,7 +7,7 @@ use crate::{
     storage::{
         data_entry::EntryAccess,
         seg_util::SegIDUtil,
-        segment::{BlockNum, Entry, SegLen, SEG_BLOCK_NUM_LIMIT},
+        segment::{BlockNum, Entry, SegLen},
         segment_manager::SegmentManager,
     },
 };

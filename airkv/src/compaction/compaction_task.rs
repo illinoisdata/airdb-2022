@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::{cmp::Reverse, collections::BinaryHeap};
 
 use itertools::Itertools;
-use rand::prelude::{IteratorRandom, SliceRandom};
+use rand::prelude::IteratorRandom;
 
 use crate::db::rw_db::ClientID;
 use crate::storage::seg_util::SegIDUtil;
