@@ -2,9 +2,17 @@ use std::{collections::HashMap, thread, time::Duration};
 
 use airkv::{db::rw_db::DBFactory, io::storage_connector::StorageType};
 use url::Url;
+use std::env;
 
 fn main() {
-    let home_dir_new = Url::parse(&format!("az:///{}/", "integration")).expect("url parse error");
+    let args: Vec<String> = env::args().collect();
+    let container  = if args.len() > 1 {
+        &args[1]
+    } else {
+        "airkvycsb"
+    };
+
+    let home_dir_new = Url::parse(&format!("az:///{}/", container)).expect("url parse error");
 
     let mut c_db = DBFactory::new_compactiondb(home_dir_new, StorageType::AzureStore);
 
