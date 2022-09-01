@@ -114,13 +114,13 @@ public class OneMeasurementHdrHistogram extends OneMeasurement {
       log.close();
     }
     exporter.write(getName(), "Operations", totalHistogram.getTotalCount());
-    exporter.write(getName(), "AverageLatency(us)", totalHistogram.getMean());
-    exporter.write(getName(), "MinLatency(us)", totalHistogram.getMinValue());
-    exporter.write(getName(), "MaxLatency(us)", totalHistogram.getMaxValue());
+    exporter.write(getName(), "AverageLatency(ms)", totalHistogram.getMean()/1000);
+    exporter.write(getName(), "MinLatency(ms)", (double) (totalHistogram.getMinValue()) / (double) 1000);
+    exporter.write(getName(), "MaxLatency(ms)", (double) (totalHistogram.getMaxValue()) / (double) 1000);
 
     for (Double percentile : percentiles) {
-      exporter.write(getName(), ordinal(percentile) + "PercentileLatency(us)",
-          totalHistogram.getValueAtPercentile(percentile));
+      exporter.write(getName(), ordinal(percentile) + "PercentileLatency(ms)",
+          (double) totalHistogram.getValueAtPercentile(percentile) / (double) 1000);
     }
 
     exportStatusCounts(exporter);
