@@ -5,9 +5,16 @@ use airkv::{
     storage::{seg_util::META_SEG_ID, segment::SegmentInfo},
 };
 use url::Url;
+use std::env;
 
 fn main() {
-    let home_url = Url::parse(&format!("az:///{}/", "integration")).expect("url parse error");
+    let args: Vec<String> = env::args().collect();
+    let container  = if args.len() > 1 {
+        &args[1]
+    } else {
+        "airkvycsb"
+    };
+    let home_url = Url::parse(&format!("az:///{}/", container)).expect("url parse error");
     let mut util_conn: Box<dyn StorageConnector> = Box::new(AzureConnector::default());
 
     let fake_props: &HashMap<String, String> = &HashMap::new();
