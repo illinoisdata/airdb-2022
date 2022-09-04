@@ -1,7 +1,7 @@
 use std::{collections::HashMap};
 
 use airkv::{
-    io::{azure_conn::AzureConnector, storage_connector::StorageConnector},
+    io::{azure_conn::AzureConnector, storage_connector::{StorageConnector, StorageType}, fake_store_service_conn::FakeStoreServiceConnector},
     storage::{seg_util::META_SEG_ID, segment::SegmentInfo},
 };
 use url::Url;
@@ -9,13 +9,35 @@ use std::env;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let container  = if args.len() > 1 {
-        &args[1]
+    let store_type: StorageType;
+    let container_addr: String;
+    if args.len() > 2 {
+        match args[1].as_str() {
+            "azure" => {
+                store_type = StorageType::AzureStore;
+                container_addr = format!("az:///{}/", args[2]); 
+            },
+            "fake" => {
+                store_type = StorageType::RemoteFakeStore;
+                container_addr = format!("file://{}/", args[2]);
+            },
+            default => panic!("unknown storage type {}, only support azure or fake", default),
+        }
     } else {
-        "airkvycsb"
+        store_type = StorageType::AzureStore;
+        container_addr = "az:///airkvycsb/".to_string();
     };
-    let home_url = Url::parse(&format!("az:///{}/", container)).expect("url parse error");
-    let mut util_conn: Box<dyn StorageConnector> = Box::new(AzureConnector::default());
+
+    let home_url = Url::parse(container_addr.as_str()).expect("url parse error");
+    let mut util_conn: Box<dyn StorageConnector> = match store_type {
+        StorageType::RemoteFakeStore => {
+            Box::new(FakeStoreServiceConnector::default())
+        },
+        StorageType::AzureStore => {
+            Box::new(AzureConnector::default())
+        },
+        _default => panic!("unknown store type, only support azure or remote fake store")
+    };
 
     let fake_props: &HashMap<String, String> = &HashMap::new();
     util_conn

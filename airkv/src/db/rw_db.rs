@@ -97,7 +97,10 @@ impl DBFactory {
                 ))
             }
             StorageType::RemoteFakeStore => {
-                todo!()
+                Box::new(CompactionDBImpl::<FakeStoreServiceConnector>::new_from_connector(
+                    home_dir_new,
+                    FakeStoreServiceConnector::default(),
+                ))
             }
             StorageType::LocalFakeStore => {
                 todo!()

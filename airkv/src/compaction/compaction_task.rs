@@ -97,15 +97,20 @@ impl TaskScheduler {
         let compact_level = cmp::min(level_num, 2);
         let candidate = (0..compact_level)
             .map(|level| {
-                let fill_score = lsm_structure.get_level_desc(level).get_seg_num() as f32
-                    / COMPACTION_SEGNUM_THRESHOLD[level as usize] as f32;
-                println!(
-                    "XXX INFO: level candidate choose: level {}, score {}",
-                    level, fill_score
-                );
-                (level, fill_score)
+                let seg_num = lsm_structure.get_level_desc(level).get_seg_num();
+                println!("segment number for level {} is {}", level, seg_num);
+                if seg_num <= 1 {
+                   (100, 0_f32)
+                } else {
+                    let fill_score = seg_num as f32/ COMPACTION_SEGNUM_THRESHOLD[level as usize] as f32;
+                    println!(
+                        "XXX INFO: level candidate choose: level {}, score {}",
+                        level, fill_score
+                    );
+                    (level, fill_score)
+                }
             })
-            // .filter(|(_level, score)| *score >= 0.75)
+            .filter(|(level, _score)| *level != 100)
             .sorted_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
             .last();
         if candidate.is_some() {

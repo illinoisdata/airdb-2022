@@ -11,9 +11,9 @@ use crate::{
         segment::{BlockNum, SegSize, SegmentProps},
     },
 };
-use std::{cell::RefCell, collections::HashMap};
+use std::{cell::RefCell, collections::HashMap, str::FromStr};
 use tokio::runtime::Runtime;
-use tonic::transport::Channel;
+use tonic::transport::{Channel, Uri};
 use url::Url;
 
 pub mod fakestore_service_connector {
@@ -37,10 +37,12 @@ pub struct FakeStoreServiceConnector {
 }
 
 async fn create_channel() -> RefCell<ClientType> {
-    let channel = Channel::from_static("http://[::1]:50051")
+    let host = "127.0.0.1";
+    let addr =  Uri::from_str(&format!("http://{}:50051", host)).expect("uri parse error");
+    let channel = Channel::builder(addr)
         .connect()
         .await
-        .expect("failed to create channel to http://[::1]:50051");
+        .unwrap_or_else(|_| panic!("failed to create channel to http://{}:50051", host));
     RefCell::new(FakeStoreServiceClient::new(channel))
 }
 
